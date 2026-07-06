@@ -1,0 +1,54 @@
+# Example deployment — a PostgreSQL DB backed up daily to local + S3.
+# Shows the inline-JSON config (no host config file needed). Secrets stay in
+# env vars and are referenced from the JSON via ${VAR} placeholders.
+
+services:
+  backup:
+    image: ghcr.io/bauer-group/backuphelper:${BACKUP_VERSION:-latest}
+    build:
+      context: .
+    container_name: ${INSTANCE_NAME:-app}_backup
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Etc/UTC}
+      # Whole multi-source job inline — no mounted config file required.
+      BACKUP_CONFIG_JSON: |
+        {
+          "instance_name": "${INSTANCE_NAME:-app}",
+          "jobs": [{
+            "name": "main",
+            "sources": [
+              {"type": "postgres", "host": "database", "database": "${DB_NAME:-app}",
+               "user": "${DB_USER:-app}", "password": "${DB_PASSWORD}"},
+              {"type": "filesystem", "name": "uploads", "path": "/uploads"}
+            ],
+            "destinations": [
+              {"type": "local"},
+              {"type": "s3", "endpoint": "${S3_ENDPOINT:-}", "bucket": "${S3_BUCKET:-}",
+               "access_key": "${S3_ACCESS_KEY:-}", "secret_key": "${S3_SECRET_KEY:-}",
+               "region": "${S3_REGION:-eu-central-1}", "prefix": "${INSTANCE_NAME:-app}/"}
+            ],
+            "schedule": {"mode": "cron", "cron": "15 3 * * *"},
+            "retention": {"count": 14, "age_days": 90},
+            "notifications": {
+              "channels": ["webhook"], "level": "warnings",
+              "webhook": {"url": "${WEBHOOK_URL:-}", "secret": "${WEBHOOK_SECRET:-}"}
+            }
+          }]
+        }
+      DB_PASSWORD: ${DB_PASSWORD}
+      WEBHOOK_URL: ${WEBHOOK_URL:-}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
+    volumes:
+      - backup-data:/data
+      - uploads:/uploads:ro
+    depends_on:
+      - database
+
+  # database:  (your app's Postgres — shown for context)
+  #   image: postgres:18-alpine
+  #   environment: { POSTGRES_DB: app, POSTGRES_USER: app, POSTGRES_PASSWORD: ${DB_PASSWORD} }
+
+volumes:
+  backup-data:
+  uploads:
