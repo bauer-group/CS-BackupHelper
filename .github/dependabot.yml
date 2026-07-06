@@ -1,23 +1,75 @@
+# =============================================================================
+# Dependabot Configuration
+# =============================================================================
+# Watches:
+#   1. GitHub Actions versions (workflows pinned to @main pull module updates)
+#   2. The Python runtime dependencies (pyproject.toml)
+#   3. The base image inside ./Dockerfile (python:3.14-alpine)
+#   4. Image references inside docker-compose*.yml files
+#
+# Base-image tag bumps here (e.g. python:3.14-alpine → 3.15-alpine) surface as
+# PRs and are auto-merged by docker-maintenance.yml. Pure digest drift on the
+# existing tag is handled by check-base-images.yml (daily cron).
+# =============================================================================
+
 version: 2
 updates:
-  - package-ecosystem: "pip"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    commit-message:
-      prefix: "chore(deps)"
-    open-pull-requests-limit: 10
-
+  # GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+      day: "sunday"
+      time: "06:30"
+      timezone: "Etc/UTC"
+    labels:
+      - "dependencies"
+      - "github-actions"
+      - "dependabot"
     commit-message:
       prefix: "chore(ci)"
 
+  # Python runtime + test dependencies
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+      time: "06:30"
+      timezone: "Etc/UTC"
+    labels:
+      - "dependencies"
+      - "python"
+      - "dependabot"
+    commit-message:
+      prefix: "chore(deps)"
+
+  # Base image (python:3.14-alpine in ./Dockerfile)
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
       interval: "weekly"
+      day: "sunday"
+      time: "06:30"
+      timezone: "Etc/UTC"
+    labels:
+      - "dependencies"
+      - "docker"
+      - "dependabot"
+    commit-message:
+      prefix: "chore(docker)"
+
+  # docker-compose example images
+  - package-ecosystem: "docker-compose"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+      time: "06:30"
+      timezone: "Etc/UTC"
+    labels:
+      - "dependencies"
+      - "docker"
+      - "dependabot"
     commit-message:
       prefix: "chore(deps)"

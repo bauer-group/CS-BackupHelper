@@ -1,0 +1,24 @@
+name: "🔄 Check Base Image Updates"
+
+on:
+  schedule:
+    # Daily at 10:00 UTC (11:00 CET / 12:00 CEST)
+    - cron: '0 10 * * *'
+
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: 'only check for updates without creating commits or releases'
+        type: boolean
+        default: false
+
+jobs:
+  check-updates:
+    name: Check for Base Image Updates
+    uses: bauer-group/automation-templates/.github/workflows/modules-docker-base-image-monitor.yml@main
+    with:
+      config-file: '.github/config/docker-base-image-monitor/base-images.json'
+      dry-run: ${{ inputs.dry-run || false }}
+      target-workflow: 'docker-release.yml'
+      target-workflow-inputs: '{"force-release": "true"}'
+    secrets: inherit

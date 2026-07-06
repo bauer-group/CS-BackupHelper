@@ -1,0 +1,17 @@
+{
+  "$schema": "https://raw.githubusercontent.com/bauer-group/automation-templates/main/.github/config/docker-base-image-monitor/docker-base-images.schema.json",
+  "_description": "BackupHelper — the central backup image. The monitor tracks the base image digest and triggers a release when it moves, so the published image stays current on security patches.",
+  "images": [
+    {
+      "name": "python-alpine",
+      "image": "python",
+      "tag": "3.14-alpine",
+      "variable": "PYTHON_ALPINE_DIGEST",
+      "description": "Base image for the BackupHelper engine (./Dockerfile)"
+    }
+  ],
+  "settings": {
+    "commit-prefix": "chore(deps)",
+    "auto-create-variables": true
+  }
+}
