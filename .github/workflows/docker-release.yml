@@ -1,0 +1,112 @@
+name: 🚀 Release & Docker Build
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '.github/**'
+      - '*.md'
+      - 'docs/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'pyproject.toml'
+      - 'Dockerfile'
+      - 'docker-compose*.yml'
+  workflow_dispatch:
+    inputs:
+      force-release:
+        description: 'force create release'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  packages: write
+  security-events: write
+
+jobs:
+  # ============================================
+  # Fast feedback: unit tests (also gated inside the Docker test stage)
+  # ============================================
+  test:
+    name: 🧪 Pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - run: pip install -e ".[test]"
+      - run: pytest -q
+
+  # ============================================
+  # Release (only on main push / dispatch)
+  # ============================================
+  release:
+    name: 📦 Create Semantic Release
+    needs: [test]
+    if: |
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      needs.test.result == 'success'
+    uses: bauer-group/automation-templates/.github/workflows/modules-semantic-release.yml@main
+    with:
+      target-branch: 'main'
+      dry-run: false
+      force-release: ${{ inputs.force-release || false }}
+    secrets: inherit
+
+  # ============================================
+  # Build & push the central image (release)
+  # ============================================
+  docker-build-release:
+    name: 🐳 Build & Push backuphelper
+    needs: release
+    if: needs.release.outputs.release-created == 'true'
+    uses: bauer-group/automation-templates/.github/workflows/docker-build.yml@main
+    with:
+      deploy-environment: 'production'
+      publish-to: 'ghcr-dockerhub'
+      ghcr-image-name: 'bauer-group/BackupHelper'
+      docker-image-name: 'bauergroup/backuphelper'
+      release-version: ${{ needs.release.outputs.version }}
+      build-args: |
+        IMAGE_VERSION=${{ needs.release.outputs.version }}
+      image-tags: 'stable'
+      update-dockerfile-version: false
+      auto-tags: true
+      latest-tag: true
+      dockerfile-path: './Dockerfile'
+      docker-context: '.'
+      platforms: 'linux/amd64,linux/arm64'
+      push: true
+      generate-sbom: true
+      sync-dockerhub-readme: true
+      security-scan: false
+      security-fail-on: 'CRITICAL'
+    secrets: inherit
+
+  # ============================================
+  # Validate the image build on PRs (no push)
+  # ============================================
+  docker-build-pr:
+    name: 🔨 Validate Build (PR)
+    needs: [test]
+    if: github.event_name == 'pull_request'
+    uses: bauer-group/automation-templates/.github/workflows/docker-build.yml@main
+    with:
+      publish-to: 'ghcr'
+      ghcr-image-name: 'bauer-group/BackupHelper'
+      auto-tags: true
+      dockerfile-path: './Dockerfile'
+      docker-context: '.'
+      platforms: 'linux/amd64'
+      push: false
+      security-scan: false
+      security-fail-on: 'CRITICAL'
+    secrets: inherit
