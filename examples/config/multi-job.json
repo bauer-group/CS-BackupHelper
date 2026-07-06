@@ -1,0 +1,21 @@
+{
+  "instance_name": "platform",
+  "jobs": [
+    {
+      "name": "database-hourly",
+      "sources": [{"type": "postgres", "host": "database", "database": "app",
+        "user": "app", "password": "${DB_PASSWORD}"}],
+      "destinations": [{"type": "local"}],
+      "schedule": {"mode": "interval", "interval_hours": 1},
+      "retention": {"count": 48}
+    },
+    {
+      "name": "files-nightly-offsite",
+      "sources": [{"type": "filesystem", "name": "data", "path": "/data/app"}],
+      "destinations": [{"type": "s3", "bucket": "offsite", "access_key": "${S3_KEY}",
+        "secret_key": "${S3_SECRET}", "prefix": "platform/files/"}],
+      "schedule": {"mode": "cron", "cron": "0 1 * * *"},
+      "retention": {"count": 30, "age_days": 365}
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "instance_name": "assets",
+  "jobs": [
+    {
+      "name": "mirror",
+      "sources": [
+        {"type": "s3", "name": "assets", "endpoint": "https://minio.internal:9000",
+         "bucket": "assets", "access_key": "${SRC_KEY}", "secret_key": "${SRC_SECRET}",
+         "force_path_style": true}
+      ],
+      "destinations": [
+        {"type": "s3", "endpoint": "https://s3.wasabisys.com", "bucket": "assets-offsite",
+         "access_key": "${DST_KEY}", "secret_key": "${DST_SECRET}", "region": "eu-central-1",
+         "prefix": "assets/"}
+      ],
+      "schedule": {"mode": "cron", "cron": "30 4 * * *"},
+      "retention": {"count": 7}
+    }
+  ]
+}

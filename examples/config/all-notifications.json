@@ -1,0 +1,26 @@
+{
+  "instance_name": "monitored",
+  "jobs": [
+    {
+      "name": "main",
+      "sources": [{"type": "postgres", "host": "database", "database": "app",
+        "user": "app", "password": "${DB_PASSWORD}"}],
+      "destinations": [{"type": "local"}],
+      "schedule": {"mode": "cron", "cron": "15 3 * * *"},
+      "retention": {"count": 14},
+      "notifications": {
+        "channels": ["email", "webhook", "teams", "slack", "discord", "ntfy", "healthchecks"],
+        "level": "warnings",
+        "email": {"host": "smtp.example.com", "port": 587, "tls": true,
+                  "username": "backup@example.com", "password": "${SMTP_PASSWORD}",
+                  "sender": "backup@example.com", "recipients": ["ops@example.com"]},
+        "webhook": {"url": "https://hooks.example.com/backup", "secret": "${WEBHOOK_SECRET}"},
+        "teams": {"url": "https://example.webhook.office.com/...", "format": "adaptive"},
+        "slack": {"url": "https://hooks.slack.com/services/T00/B00/xxxx"},
+        "discord": {"url": "https://discord.com/api/webhooks/000/xxxx"},
+        "ntfy": {"url": "https://ntfy.sh", "topic": "myapp-backups", "token": "${NTFY_TOKEN}"},
+        "healthchecks": {"url": "https://hc-ping.com/uuid-here"}
+      }
+    }
+  ]
+}

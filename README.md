@@ -4,101 +4,94 @@
 > individually-maintained backup sidecars.
 
 BackupHelper snapshots **pluggable sources** (PostgreSQL, MariaDB, MySQL,
-S3-compatible buckets *including per-object metadata*, local filesystems, and an
+S3-compatible buckets *including per-object metadata*, local filesystems and an
 env whitelist), bundles them into deterministic `tar.gz` archives with a
 **sha256 manifest**, applies **retention** (count / age / GFS / smart-last),
 optionally **encrypts** them (age/gpg) and ships them to **S3-compatible or
 local** storage — on a **cron/interval schedule**, with **notifications** and a
 full **restore CLI**.
 
-The design principle: **the core knows _how_ to move bytes safely; the consuming
-repo knows _what_ the bytes mean.** Application-specific logic (n8n CLI export,
+**Design principle:** the core knows *how* to move bytes safely; the consuming
+repo knows *what* the bytes mean. Application-specific logic (n8n CLI export,
 NocoDB REST export, service quiescing) lives in each repo as a registered
-**Source plugin** or **lifecycle hook**, never inside this engine.
+[Source plugin](docs/plugins.md) or lifecycle hook — never inside this engine.
+
+## Features
+
+- **Sources**: PostgreSQL 18, MariaDB 11/12, MySQL 8/9, S3 buckets (with
+  per-object metadata/tags/content-type), filesystem path-groups, env whitelist
+  — combinable into one atomic snapshot.
+- **Destinations**: local + any S3-compatible target (MinIO, R2, B2, Wasabi,
+  Ceph, Garage) via a hand-rolled equal-chunk multipart uploader.
+- **Integrity**: deterministic archives + sha256 manifest (embedded + sidecar)
+  + a `verify` command.
+- **Retention**: count, age, GFS (grandfather-father-son) and smart-last,
+  applied independently per destination.
+- **Notifications**: email, HMAC-signed webhook, Teams, Slack, Discord,
+  ntfy/Gotify and a healthchecks.io dead-man's-switch — severity-gated with
+  per-channel fault isolation.
+- **Encryption**: optional client-side age/gpg before off-site upload.
+- **Restore**: full restore CLI for every source type.
+- **Ops**: non-root, tini, a functional healthcheck, structured logging with
+  secret redaction, and a test-gated multi-stage image.
 
 ## Quick start
 
 ```bash
-docker run --rm \
-  -e INSTANCE_NAME=myapp \
-  -e BACKUP_JOBS__0__SOURCES__0__TYPE=postgres \
-  -e BACKUP_JOBS__0__SOURCES__0__HOST=db \
-  -e BACKUP_JOBS__0__SOURCES__0__DATABASE=app \
-  -e BACKUP_JOBS__0__SOURCES__0__USER=app \
-  -e DB_PASSWORD=secret \
-  -e BACKUP_JOBS__0__SOURCES__0__PASSWORD='${DB_PASSWORD}' \
-  -v backup-data:/data \
-  ghcr.io/bauer-group/backuphelper:latest --now
+cp .env.example .env      # set DB_PASSWORD and (optionally) S3 credentials
+docker compose --profile backup up -d
+docker compose run --rm backup --now      # take a snapshot now
+docker compose run --rm backup list       # list snapshots
+docker compose run --rm backup verify <id>
 ```
 
-Most deployments pass the whole config as one inline JSON string — see
-[`docker-compose.yml`](docker-compose.yml).
+Most deployments pass the whole job inline as `BACKUP_CONFIG_JSON` — see
+[docker-compose.yml](docker-compose.yml) and [docker-compose.sidecar.yml](docker-compose.sidecar.yml).
 
-## Configuration (three layers, highest precedence wins)
+## Configuration in 30 seconds
 
-1. **Discrete env vars** — `BACKUP_JOBS__0__RETENTION__COUNT=30` (nested with `__`).
-2. **`BACKUP_CONFIG_JSON`** — the entire (multi-job) config inline, no host file.
-   Base64 variant: `BACKUP_CONFIG_JSON_BASE64`.
-3. **`BACKUP_CONFIG_FILE`** — a mounted `/config/backup.json` or `.yaml`.
-
-Secrets are referenced as `${ENV_VAR}` inside the JSON and resolved from the
-environment, so they never live in the config literal.
+Config comes from (highest precedence first): discrete `BACKUP_..__` env
+overrides → inline `BACKUP_CONFIG_JSON` → mounted `BACKUP_CONFIG_FILE` → model
+defaults. Secrets are referenced as `${VAR}` and resolved from the environment,
+never written into the config text.
 
 ```json
-{ "version": 1, "instance_name": "iam",
+{
+  "instance_name": "app",
   "jobs": [{
     "name": "main",
     "sources": [
-      {"type": "postgres", "host": "db", "database": "logto", "password": "${DB_PASSWORD}"},
-      {"type": "s3", "endpoint": "https://minio:9000", "bucket": "attachments"},
-      {"type": "filesystem", "name": "uploads", "path": "/data/uploads", "exclude": ["cache/*"]}
+      {"type": "postgres", "host": "db", "database": "app", "password": "${DB_PASSWORD}"},
+      {"type": "filesystem", "name": "uploads", "path": "/uploads"}
     ],
-    "destinations": [{"type": "local"}, {"type": "s3", "bucket": "offsite", "prefix": "iam/"}],
+    "destinations": [{"type": "local"}, {"type": "s3", "bucket": "offsite", "prefix": "app/"}],
     "schedule": {"mode": "cron", "cron": "15 3 * * *"},
-    "retention": {"count": 14, "age_days": 90, "gfs": {"daily": 7, "weekly": 4, "monthly": 6}},
-    "encryption": {"mode": "none"},
-    "notifications": {"channels": ["webhook", "teams"], "level": "warnings",
-                      "webhook": {"url": "https://...", "secret": "${WEBHOOK_SECRET}"}}
+    "retention": {"count": 14, "age_days": 90}
   }]
 }
 ```
 
-**Destinations are only `s3` or `local`.** Policy: S3 when configured (off-site),
-otherwise local. `local` is always the working store; a `keep-local` toggle
-controls whether the local copy survives after a successful S3 upload.
+Ready-to-adapt configs for common cases live in [examples/config/](examples/config/).
 
-## Sources
+## Documentation
 
-| type | backs up | tool |
-| --- | --- | --- |
-| `postgres` | PostgreSQL 18 | `pg_dump` custom/plain |
-| `mariadb` | MariaDB 11/12 | `mariadb-dump` (multi-DB) |
-| `mysql` | MySQL 8/9 | `mysqldump` |
-| `s3` | S3 bucket + **per-object metadata/tags/content-type** | boto3 |
-| `filesystem` | a named path-group (uploads, content, …) | deterministic tar |
-| `env` | a whitelist of env vars | json |
+| Guide | What it covers |
+| --- | --- |
+| [configuration.md](docs/configuration.md) | Config layers, secrets, the full schema |
+| [sources.md](docs/sources.md) | Every source type and its options |
+| [destinations.md](docs/destinations.md) | Local + S3, the multipart uploader |
+| [retention.md](docs/retention.md) | count / age / GFS / smart-last |
+| [notifications.md](docs/notifications.md) | Channels + webhook HMAC signing |
+| [encryption.md](docs/encryption.md) | age/gpg client-side encryption |
+| [cli.md](docs/cli.md) | Every command and exit code |
+| [restore.md](docs/restore.md) | Disaster-recovery walkthrough |
+| [deployment.md](docs/deployment.md) | Meta-Dockerfile pattern, healthcheck, security |
+| [plugins.md](docs/plugins.md) | Source-plugin + lifecycle-hook extension API |
+| [migration.md](docs/migration.md) | Adopting BackupHelper across the fleet |
 
-Repos add app-specific sources (n8n, NocoDB, GitHub, …) via the
-`backuphelper.sources` entry-point group — no engine changes.
+## Adopting it in a repo
 
-## CLI
-
-```
-backuphelper                 # scheduler daemon (default)
-backuphelper --now           # run every job once and exit
-backuphelper create          # snapshot now
-backuphelper list            # list snapshots (local + remote)
-backuphelper show <id>       # snapshot detail
-backuphelper verify <id>     # re-hash against the manifest
-backuphelper restore <id>    # restore (destructive; --force to skip prompt)
-backuphelper prune           # apply retention (--dry-run / --keep N)
-backuphelper config print --redacted   # show effective config, secrets masked
-backuphelper healthcheck     # exit 0 if last backup is fresh
-```
-
-## Adopting it in a repo (meta-layer)
-
-Replace the repo's bespoke backup container with a ~20-line meta-Dockerfile:
+Replace a repo's bespoke backup container with a ~20-line meta-Dockerfile:
 
 ```dockerfile
 FROM ghcr.io/bauer-group/backuphelper:1
@@ -106,6 +99,8 @@ ARG PG_CLIENT_VERSION=18
 LABEL org.opencontainers.image.title="MyApp Backup"
 # Sources/destinations/schedule come from env or BACKUP_CONFIG_JSON in compose.
 ```
+
+See [migration.md](docs/migration.md) for the full fleet migration plan.
 
 ## Development
 
