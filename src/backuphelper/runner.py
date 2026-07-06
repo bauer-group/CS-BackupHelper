@@ -98,6 +98,8 @@ def run_job(
     for dest in destinations:
         _apply_retention(dest, job.retention, now, errors)
 
+    _maybe_drop_local(job, data_dir, artifact.name, sid, errors)
+
     shutil.rmtree(work, ignore_errors=True)
     try:  # remove the now-empty .work parent so it never pollutes the data dir
         (data_dir / ".work").rmdir()
@@ -105,7 +107,8 @@ def run_job(
         pass
 
     status = "success" if not errors else ("warning" if ok else "error")
-    stored = data_dir / artifact.name if _has_local(job.destinations) else None
+    stored_path = data_dir / artifact.name
+    stored = stored_path if stored_path.exists() else None
     result = JobResult(status=status, snapshot_id=sid, archive=stored,
                        total_bytes=manifest.total_bytes, components=components, errors=errors)
 
@@ -247,6 +250,18 @@ def _has_local(specs: list[DestinationSpec]) -> bool:
     return any(s.type == "local" for s in specs)
 
 
+def _maybe_drop_local(job: Job, data_dir: Path, artifact_name: str, sid: str,
+                      errors: list[str]) -> None:
+    """Drop the local copy after a clean off-site upload when keep_local is off."""
+    has_s3 = any(s.type == "s3" for s in job.destinations)
+    if job.keep_local or not has_s3 or not _has_local(job.destinations):
+        return
+    if any("upload failed" in e for e in errors):
+        return  # keep local as a safety net when off-site upload had trouble
+    (data_dir / artifact_name).unlink(missing_ok=True)
+    (data_dir / f"{sid}.manifest.json").unlink(missing_ok=True)
+
+
 def _upload(destinations: list[Destination], artifact: Path, sidecar: Path, sid: str,
             errors: list[str]) -> None:
     for dest in destinations:
@@ -264,7 +279,7 @@ def _apply_retention(dest: Destination, cfg: RetentionConfig, now: datetime,
         # Only top-level artifacts are snapshots; ignore any nested staging keys.
         sids = sorted({k[: -len(".manifest.json")] for k in dest.list_keys()
                        if k.endswith(".manifest.json") and "/" not in k})
-        snapshots = [Snapshot(s, _parse_ts(s, now)) for s in sids]
+        snapshots = [Snapshot(s, parse_snapshot_timestamp(s, now)) for s in sids]
         for pruned in retention_manager.select_prunable(snapshots, cfg, now):
             for key in list(dest.list_keys(prefix=f"{pruned}.")):
                 dest.delete(key)
@@ -273,7 +288,7 @@ def _apply_retention(dest: Destination, cfg: RetentionConfig, now: datetime,
         errors.append(f"retention failed: {exc}")
 
 
-def _parse_ts(sid: str, fallback: datetime) -> datetime:
+def parse_snapshot_timestamp(sid: str, fallback: datetime) -> datetime:
     try:
         return datetime.strptime(sid, _SID_FORMAT).replace(tzinfo=timezone.utc)
     except ValueError:

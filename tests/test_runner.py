@@ -76,6 +76,33 @@ def test_a_failing_source_yields_partial_warning(tmp_path):
     assert spy.events[0].status == "warning"
 
 
+def test_keep_local_false_drops_local_copy_after_s3_upload(tmp_path):
+    import boto3
+    from moto import mock_aws
+
+    src = tmp_path / "uploads"
+    src.mkdir()
+    (src / "a.txt").write_text("A")
+    data = tmp_path / "data"
+
+    with mock_aws():
+        boto3.client("s3", region_name="eu-central-1", aws_access_key_id="k",
+                     aws_secret_access_key="s").create_bucket(
+            Bucket="offsite", CreateBucketConfiguration={"LocationConstraint": "eu-central-1"})
+        job = Job.model_validate({
+            "name": "main", "keep_local": False,
+            "sources": [{"type": "filesystem", "name": "uploads", "path": str(src)}],
+            "destinations": [{"type": "local"},
+                             {"type": "s3", "bucket": "offsite", "access_key": "k",
+                              "secret_key": "s", "region": "eu-central-1", "ensure_bucket": False}],
+        })
+        result = run_job(job, data_dir=data, instance_name="i", now=NOW, snapshot_id="k1")
+
+    assert result.status == "success"
+    assert not (data / "k1.tar.gz").exists()  # local copy dropped
+    assert list(data.glob("*.tar.gz")) == []
+
+
 def test_run_leaves_no_work_artifacts_in_data_dir(tmp_path):
     data = tmp_path / "data"
     run_job(_fs_job(tmp_path), data_dir=data, instance_name="i", now=NOW, snapshot_id="s9")

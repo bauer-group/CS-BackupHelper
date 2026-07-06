@@ -209,9 +209,13 @@ def prune(keep: Optional[int] = typer.Option(None, "--keep"),
         return
     if keep is not None:
         retention = retention.model_copy(update={"count": keep})
+    from .runner import parse_snapshot_timestamp
+
+    now = datetime.now(timezone.utc)
     sids = sorted(m.name[: -len(".manifest.json")] for m in dd.glob("*.manifest.json"))
-    snaps = [Snapshot(s, datetime.now(timezone.utc)) for s in sids]
-    pruned = rm.select_prunable(snaps, retention, datetime.now(timezone.utc))
+    # Parse the real timestamp from the id so age/GFS behave as in the daemon.
+    snaps = [Snapshot(s, parse_snapshot_timestamp(s, now)) for s in sids]
+    pruned = rm.select_prunable(snaps, retention, now)
     for sid in sorted(pruned):
         typer.echo(f"{'would prune' if dry_run else 'pruning'} {sid}")
         if not dry_run:
