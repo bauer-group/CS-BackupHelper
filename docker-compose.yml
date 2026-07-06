@@ -1,54 +1,145 @@
-# Example deployment — a PostgreSQL DB backed up daily to local + S3.
-# Shows the inline-JSON config (no host config file needed). Secrets stay in
-# env vars and are referenced from the JSON via ${VAR} placeholders.
+# =============================================================================
+# BackupHelper — Standalone Example (PostgreSQL + uploads → local + off-site S3)
+# =============================================================================
+# Usage:  cp .env.example .env  &&  edit .env  &&  docker compose up -d
+#         docker compose run --rm backup --now      # run one snapshot now
+#         docker compose run --rm backup list       # list snapshots
+#         docker compose run --rm backup verify <id>
+#
+# What this shows:
+#   - The whole backup job passed INLINE as BACKUP_CONFIG_JSON — no host config
+#     file needed. Secrets are referenced as $${VAR} so Compose leaves them
+#     literal and the container resolves them from its own environment (they
+#     never end up baked into the rendered config).
+#   - One job with two sources (Postgres dump + an uploads directory) bundled
+#     into a single atomic snapshot, kept locally AND pushed off-site to any
+#     S3-compatible target (leave BACKUP_S3_* empty to stay local-only).
+#
+# Architecture:
+#     ┌───────────┐        ┌──────────────┐        ┌──────────────────┐
+#     │ database  │◀──────▶│    backup    │──────▶ │ local /data volume│
+#     │ (Postgres)│  dump  │ (BackupHelper)│  +off- └──────────────────┘
+#     └───────────┘        └──────┬───────┘  site   ┌──────────────────┐
+#                                 └────────────────▶│ S3-compatible bkt │
+#                                                    └──────────────────┘
+# =============================================================================
+
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "50m"
+      max-file: "3"
 
 services:
-  backup:
-    image: ghcr.io/bauer-group/backuphelper:${BACKUP_VERSION:-latest}
-    build:
-      context: .
-    container_name: ${INSTANCE_NAME:-app}_backup
+
+  # ── PostgreSQL (the database being backed up) ──────────────────────────────
+  database:
+    image: ${POSTGRES_IMAGE:-postgres}:${POSTGRES_VERSION:-18-alpine}
+    container_name: ${STACK_NAME:-app}_DATABASE
+    hostname: database
     restart: unless-stopped
+    <<: *logging
     environment:
-      TZ: ${TZ:-Etc/UTC}
-      # Whole multi-source job inline — no mounted config file required.
+      TZ: ${TIME_ZONE:-Etc/UTC}
+      POSTGRES_DB: ${DB_NAME:-app}
+      POSTGRES_USER: ${DB_USER:-app}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+    volumes:
+      - database-data:/var/lib/postgresql/data
+    expose:
+      - 5432/tcp
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-app} -d ${DB_NAME:-app}"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - local
+
+  # ── BackupHelper (the backup engine) ───────────────────────────────────────
+  backup:
+    image: ${BACKUP_IMAGE:-ghcr.io/bauer-group/backuphelper}:${BACKUP_VERSION:-latest}
+    container_name: ${STACK_NAME:-app}_BACKUP
+    hostname: backup
+    profiles: ["backup"]
+    restart: unless-stopped
+    <<: *logging
+    depends_on:
+      database:
+        condition: service_healthy
+    environment:
+      TZ: ${TIME_ZONE:-Etc/UTC}
+      BACKUP_DATA_DIR: /data
+      BACKUP_LOG_LEVEL: ${BACKUP_LOG_LEVEL:-INFO}
+      BACKUP_LOG_FORMAT: ${BACKUP_LOG_FORMAT:-console}
+
+      # Secrets resolved by the container (kept out of the rendered config).
+      DB_PASSWORD: ${DB_PASSWORD}
+      BACKUP_S3_SECRET_KEY: ${BACKUP_S3_SECRET_KEY:-}
+      WEBHOOK_SECRET: ${BACKUP_WEBHOOK_SECRET:-}
+
+      # The whole job, inline. $${VAR} stays literal in Compose and is resolved
+      # by BackupHelper from the environment above.
       BACKUP_CONFIG_JSON: |
         {
-          "instance_name": "${INSTANCE_NAME:-app}",
+          "instance_name": "${STACK_NAME:-app}",
           "jobs": [{
             "name": "main",
             "sources": [
-              {"type": "postgres", "host": "database", "database": "${DB_NAME:-app}",
-               "user": "${DB_USER:-app}", "password": "${DB_PASSWORD}"},
-              {"type": "filesystem", "name": "uploads", "path": "/uploads"}
+              {"type": "postgres", "host": "database", "port": 5432,
+               "database": "${DB_NAME:-app}", "user": "${DB_USER:-app}",
+               "password": "$${DB_PASSWORD}", "dump_format": "custom"},
+              {"type": "filesystem", "name": "uploads", "path": "/uploads",
+               "exclude": ["cache/*", "tmp/*"]}
             ],
             "destinations": [
               {"type": "local"},
-              {"type": "s3", "endpoint": "${S3_ENDPOINT:-}", "bucket": "${S3_BUCKET:-}",
-               "access_key": "${S3_ACCESS_KEY:-}", "secret_key": "${S3_SECRET_KEY:-}",
-               "region": "${S3_REGION:-eu-central-1}", "prefix": "${INSTANCE_NAME:-app}/"}
+              {"type": "s3",
+               "endpoint": "${BACKUP_S3_ENDPOINT:-}",
+               "bucket": "${BACKUP_S3_BUCKET:-}",
+               "access_key": "${BACKUP_S3_ACCESS_KEY:-}",
+               "secret_key": "$${BACKUP_S3_SECRET_KEY}",
+               "region": "${BACKUP_S3_REGION:-eu-central-1}",
+               "prefix": "${BACKUP_S3_PREFIX:-app/}"}
             ],
-            "schedule": {"mode": "cron", "cron": "15 3 * * *"},
-            "retention": {"count": 14, "age_days": 90},
+            "schedule": {"mode": "cron", "cron": "${BACKUP_CRON:-15 3 * * *}",
+                         "on_startup": ${BACKUP_ON_STARTUP:-false}},
+            "retention": {"count": ${BACKUP_RETENTION_COUNT:-14},
+                          "age_days": ${BACKUP_RETENTION_AGE_DAYS:-90}},
+            "encryption": {"mode": "${BACKUP_ENCRYPTION_MODE:-none}"},
             "notifications": {
-              "channels": ["webhook"], "level": "warnings",
-              "webhook": {"url": "${WEBHOOK_URL:-}", "secret": "${WEBHOOK_SECRET:-}"}
+              "channels": ${BACKUP_ALERT_CHANNELS:-[]},
+              "level": "${BACKUP_ALERT_LEVEL:-warnings}",
+              "webhook": {"url": "${BACKUP_WEBHOOK_URL:-}", "secret": "$${WEBHOOK_SECRET}"},
+              "teams": {"url": "${BACKUP_TEAMS_WEBHOOK:-}"}
             }
           }]
         }
-      DB_PASSWORD: ${DB_PASSWORD}
-      WEBHOOK_URL: ${WEBHOOK_URL:-}
-      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
     volumes:
       - backup-data:/data
-      - uploads:/uploads:ro
-    depends_on:
-      - database
+      - ${UPLOADS_PATH:-app-uploads}:/uploads:ro
+    healthcheck:
+      test: ["CMD", "backuphelper", "healthcheck"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "${BACKUP_CPU_LIMIT:-1.0}"
+          memory: ${BACKUP_MEM_LIMIT:-512M}
+    networks:
+      - local
 
-  # database:  (your app's Postgres — shown for context)
-  #   image: postgres:18-alpine
-  #   environment: { POSTGRES_DB: app, POSTGRES_USER: app, POSTGRES_PASSWORD: ${DB_PASSWORD} }
+networks:
+  local:
+    driver: bridge
+    name: ${STACK_NAME:-app}
 
 volumes:
+  database-data:
   backup-data:
-  uploads:
+  app-uploads:
