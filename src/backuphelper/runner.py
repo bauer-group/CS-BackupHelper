@@ -242,7 +242,15 @@ def _build_destinations(specs: list[DestinationSpec], data_dir: Path) -> list[De
         if spec.type == "local":
             destinations.append(LocalDestination(data_dir))
         elif spec.type == "s3":
-            destinations.append(S3Destination(spec.model_dump(exclude={"type"})))
+            data = spec.model_dump(exclude={"type"})
+            if not data.get("bucket"):
+                # "S3 if configured, else local" — an S3 target with no bucket is
+                # simply not configured; skip it (keeps local-only deployments).
+                log.info("s3 destination has no bucket configured — skipping (local-only)")
+                continue
+            destinations.append(S3Destination(data))
+    if not destinations:
+        destinations.append(LocalDestination(data_dir))  # never silently drop the backup
     return destinations
 
 

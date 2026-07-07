@@ -103,6 +103,22 @@ def test_keep_local_false_drops_local_copy_after_s3_upload(tmp_path):
     assert list(data.glob("*.tar.gz")) == []
 
 
+def test_unconfigured_s3_destination_is_skipped_local_only(tmp_path):
+    data = tmp_path / "data"
+    job = _fs_job(tmp_path, destinations=[{"type": "local"}, {"type": "s3", "bucket": ""}])
+    result = run_job(job, data_dir=data, instance_name="i", now=NOW, snapshot_id="s8")
+    assert result.status == "success"
+    assert (data / "s8.tar.gz").exists()  # no crash on the empty S3 target
+
+
+def test_only_unconfigured_s3_falls_back_to_local(tmp_path):
+    data = tmp_path / "data"
+    job = _fs_job(tmp_path, destinations=[{"type": "s3", "bucket": ""}])
+    result = run_job(job, data_dir=data, instance_name="i", now=NOW, snapshot_id="s7")
+    assert result.status == "success"
+    assert (data / "s7.tar.gz").exists()  # fell back to local, backup not lost
+
+
 def test_run_leaves_no_work_artifacts_in_data_dir(tmp_path):
     data = tmp_path / "data"
     run_job(_fs_job(tmp_path), data_dir=data, instance_name="i", now=NOW, snapshot_id="s9")
