@@ -1,0 +1,200 @@
+# =============================================================================
+# BackupHelper — Local Development Stack (turnkey E2E)
+# =============================================================================
+# A self-contained stack for local development and end-to-end testing:
+#
+#   database   — PostgreSQL 18 (the thing being backed up)
+#   minio      — BAUER GROUP MinIO S3 server (the off-site backup target)
+#   minio-init — provisions the `backups` bucket + a scoped service account
+#                from an inline JSON config (no host file), then exits
+#   backup     — BackupHelper, built from ./Dockerfile, snapshotting the DB +
+#                an uploads dir to local /data AND the MinIO bucket
+#
+# Usage:
+#   docker compose -f docker-compose.development.yml build
+#   docker compose -f docker-compose.development.yml up -d database minio minio-init
+#   docker compose -f docker-compose.development.yml run --rm backup --now
+#   docker compose -f docker-compose.development.yml run --rm backup list
+#   docker compose -f docker-compose.development.yml run --rm backup verify <id>
+#   MinIO console: http://localhost:9001  (admin / minioadmin-dev)
+#
+# Everything has dev defaults so it runs with no .env file.
+# =============================================================================
+
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "2"
+
+services:
+
+  # ── PostgreSQL (backup source) ─────────────────────────────────────────────
+  database:
+    image: postgres:18-alpine
+    container_name: bh-dev_DATABASE
+    hostname: database
+    restart: unless-stopped
+    <<: *logging
+    environment:
+      POSTGRES_DB: ${DB_NAME:-app}
+      POSTGRES_USER: ${DB_USER:-app}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-devpassword}
+    volumes:
+      - database-data:/var/lib/postgresql
+    expose:
+      - 5432/tcp
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-app} -d ${DB_NAME:-app}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - local
+
+  # ── MinIO S3 server (backup destination) ───────────────────────────────────
+  minio:
+    image: ${MINIO_IMAGE:-ghcr.io/bauer-group/cs-minio/minio}:${MINIO_VERSION:-latest}
+    container_name: bh-dev_MINIO
+    hostname: minio
+    restart: unless-stopped
+    <<: *logging
+    command: server --address ":9000" --console-address ":9090" /data
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin-dev}
+      MINIO_REGION_NAME: ${MINIO_REGION:-eu-central-1}
+    volumes:
+      - minio-data:/data
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9090"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    networks:
+      - local
+
+  # ── MinIO init — provision bucket + service account from inline JSON ────────
+  minio-init:
+    image: ${MINIO_INIT_IMAGE:-ghcr.io/bauer-group/cs-minio/minio-init}:${MINIO_INIT_VERSION:-latest}
+    container_name: bh-dev_MINIO_INIT
+    restart: "no"
+    <<: *logging
+    environment:
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin-dev}
+      MINIO_WAIT_TIMEOUT: ${MINIO_WAIT_TIMEOUT:-60}
+      # The image's built-in default.json always provisions a console admin.
+      CONSOLE_USER: ${CONSOLE_USER:-console-admin}
+      CONSOLE_PASSWORD: ${CONSOLE_PASSWORD:-console-dev-pass}
+      BACKUP_S3_USER: ${BACKUP_S3_USER:-backup-app}
+      BACKUP_S3_PASSWORD: ${BACKUP_S3_PASSWORD:-backup-secret-dev}
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-backups}
+    configs:
+      - source: minio-init-config
+        target: /app/config/init.json
+    depends_on:
+      minio:
+        condition: service_healthy
+    networks:
+      - local
+
+  # ── BackupHelper (built from local source) ─────────────────────────────────
+  backup:
+    build:
+      context: .
+    image: backuphelper:dev
+    container_name: bh-dev_BACKUP
+    <<: *logging
+    environment:
+      BACKUP_DATA_DIR: /data
+      BACKUP_LOG_LEVEL: ${BACKUP_LOG_LEVEL:-INFO}
+      DB_PASSWORD: ${DB_PASSWORD:-devpassword}
+      BACKUP_S3_PASSWORD: ${BACKUP_S3_PASSWORD:-backup-secret-dev}
+      BACKUP_CONFIG_JSON: |
+        {
+          "instance_name": "bh-dev",
+          "jobs": [{
+            "name": "main",
+            "sources": [
+              {"type": "postgres", "host": "database", "port": 5432,
+               "database": "${DB_NAME:-app}", "user": "${DB_USER:-app}",
+               "password": "$${DB_PASSWORD}", "dump_format": "custom"},
+              {"type": "filesystem", "name": "uploads", "path": "/uploads"}
+            ],
+            "destinations": [
+              {"type": "local"},
+              {"type": "s3", "endpoint": "http://minio:9000",
+               "bucket": "${BACKUP_S3_BUCKET:-backups}",
+               "access_key": "${BACKUP_S3_USER:-backup-app}",
+               "secret_key": "$${BACKUP_S3_PASSWORD}",
+               "region": "${MINIO_REGION:-eu-central-1}",
+               "prefix": "bh-dev/", "force_path_style": true,
+               "ensure_bucket": false}
+            ],
+            "schedule": {"mode": "cron", "cron": "15 3 * * *"},
+            "retention": {"count": 7}
+          }]
+        }
+    volumes:
+      - backup-data:/data
+      - ./examples/dev-uploads:/uploads:ro
+    depends_on:
+      database:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    networks:
+      - local
+
+# Inline MinIO bootstrap: a private `backups` bucket + a scoped service account
+# the backup container uses. $$ keeps the secret literal for minio-init to
+# resolve from its own environment.
+configs:
+  minio-init-config:
+    content: |
+      {
+        "$$schema": "https://raw.githubusercontent.com/bauer-group/CS-MinIO/main/init.schema.json",
+        "_description": "BackupHelper dev bootstrap — backups bucket + scoped service account.",
+        "buckets": [
+          {"name": "${BACKUP_S3_BUCKET:-backups}", "region": "${MINIO_REGION:-eu-central-1}",
+           "versioning": false, "policy": "private"}
+        ],
+        "policies": [
+          {
+            "name": "pBackup",
+            "statements": [
+              {"Effect": "Allow",
+               "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"],
+               "Resource": ["arn:aws:s3:::${BACKUP_S3_BUCKET:-backups}/*"]},
+              {"Effect": "Allow",
+               "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
+               "Resource": ["arn:aws:s3:::${BACKUP_S3_BUCKET:-backups}"]}
+            ]
+          }
+        ],
+        "groups": [
+          {"name": "gBackup", "policies": ["pBackup"]}
+        ],
+        "users": [
+          {"access_key": "${BACKUP_S3_USER:-backup-app}", "secret_key": "$${BACKUP_S3_PASSWORD}",
+           "groups": ["gBackup"]}
+        ]
+      }
+
+networks:
+  local:
+    driver: bridge
+    name: bh-dev
+
+volumes:
+  database-data:
+  minio-data:
+  backup-data:

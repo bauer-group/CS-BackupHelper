@@ -1,0 +1,2 @@
+Hello from BackupHelper local development.
+This file is backed up by the filesystem source in docker-compose.development.yml.
