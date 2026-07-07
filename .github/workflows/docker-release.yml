@@ -41,9 +41,15 @@ jobs:
     name: 🔍 Validate Docker Compose
     uses: bauer-group/automation-templates/.github/workflows/modules-validate-compose.yml@main
     with:
-      compose-files: '["docker-compose.yml", "docker-compose.sidecar.yml"]'
+      # Sidecar is the shipped deliverable of this repo; the standalone example's
+      # database exists only for local testing, so CI validates the sidecar file.
+      compose-file: 'docker-compose.sidecar.yml'
       env-file: '.env.example'
-      validate-services: '["database", "backup"]'
+      # `backup` is deliberately profiles:[backup] (on-demand), so it is absent
+      # from `docker compose config` and cannot be a required service here. This
+      # is a syntax/render check; once the shared workflow is profile-aware it
+      # can assert 'backup' via an activated profile.
+      validate-services: '[]'
 
   validate-scripts:
     name: 🔍 Validate Shell Scripts
