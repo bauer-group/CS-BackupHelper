@@ -109,7 +109,7 @@ nocodb = "myapp_backup.nocodb_source:NocoDBSource"
 **3 — install it into the image** in the repo's meta-Dockerfile:
 
 ```dockerfile
-FROM ghcr.io/bauer-group/cs-backuphelper/backuphelper:1
+FROM ghcr.io/bauer-group/cs-backuphelper/backuphelper:latest
 USER root
 COPY myapp_backup/ /opt/myapp_backup/myapp_backup/
 COPY pyproject.toml /opt/myapp_backup/

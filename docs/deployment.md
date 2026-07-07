@@ -137,7 +137,7 @@ without breaking on a major bump.
 BackupHelper is the **central** image. A consuming repo does **not** fork it —
 it ships a thin (~20-line) meta-Dockerfile that only:
 
-1. inherits `FROM ghcr.io/bauer-group/cs-backuphelper/backuphelper:1`,
+1. inherits `FROM ghcr.io/bauer-group/cs-backuphelper/backuphelper:latest`,
 2. sets its own OCI labels (provenance for the repo's derived image),
 3. optionally adds extra clients its sources need,
 
@@ -147,7 +147,7 @@ and gets its sources/destinations/schedule entirely from environment or
 ```dockerfile
 # syntax=docker/dockerfile:1
 # MyApp backup image — thin meta-layer over the central BackupHelper engine.
-FROM ghcr.io/bauer-group/cs-backuphelper/backuphelper:1
+FROM ghcr.io/bauer-group/cs-backuphelper/backuphelper:latest
 
 # OCI provenance for THIS repo's derived image.
 LABEL org.opencontainers.image.title="MyApp Backup"
@@ -213,7 +213,7 @@ service alongside the app, config supplied inline via `BACKUP_CONFIG_JSON` with
   services:
     backup:
       profiles: ["backup"]
-      image: ghcr.io/bauer-group/cs-backuphelper/backuphelper:1
+      image: ghcr.io/bauer-group/cs-backuphelper/backuphelper:latest
       # ...
   ```
 

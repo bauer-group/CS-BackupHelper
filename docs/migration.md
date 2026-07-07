@@ -9,12 +9,25 @@ The fleet's backup sidecars drifted: some sign webhooks with HMAC, others send t
 Each repo keeps its Dockerfile, reduced to a meta-layer:
 
 ```dockerfile
-FROM ghcr.io/bauer-group/cs-backuphelper/backuphelper:1
-ARG PG_CLIENT_VERSION=18
+FROM ghcr.io/bauer-group/cs-backuphelper/backuphelper:latest
+
+# ---------------------------------------------------------------------------
+# Metadata Labels
+# ---------------------------------------------------------------------------
+LABEL vendor="BAUER GROUP"
+LABEL maintainer="Karl Bauer <karl.bauer@bauer-group.com>"
 LABEL org.opencontainers.image.title="CS-IAMStack Database-Backup"
 LABEL org.opencontainers.image.source="https://github.com/bauer-group/CS-IAMStack"
+LABEL org.opencontainers.image.version="1.0.0"
+
+# Inherit ENTRYPOINT, USER, ENV, HEALTHCHECK from the base image.
 # Sources / destinations / schedule come from env or BACKUP_CONFIG_JSON in compose.
 ```
+
+Track `:latest` so a new central-engine release flows into the consuming image on
+its next build. The central image already ships the postgres/mariadb clients,
+tini, a non-root user and the healthcheck — the meta-layer adds only labels (and,
+if needed, an extra client via `apk add`).
 
 The compose service points at that image and supplies the job config inline — see [docker-compose.yml](../docker-compose.yml) and [docker-compose.sidecar.yml](../docker-compose.sidecar.yml).
 
