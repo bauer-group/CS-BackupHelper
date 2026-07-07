@@ -9,7 +9,7 @@ from backuphelper.sources.postgres import PostgresSource, build_dump_argv, build
 
 def _cfg(**over):
     base = {"type": "postgres", "host": "db", "port": 5432, "database": "logto",
-            "user": "logto", "password": "s3cret"}
+            "user": "logto", "password": "changeme"}
     base.update(over)
     return base
 
@@ -17,11 +17,11 @@ def _cfg(**over):
 def test_env_carries_password_and_connection_but_argv_does_not():
     src = PostgresSource(_cfg())
     env = build_env(src.cfg)
-    assert env["PGPASSWORD"] == "s3cret"
+    assert env["PGPASSWORD"] == "changeme"
     assert env["PGHOST"] == "db"
     assert env["PGDATABASE"] == "logto"
     argv = build_dump_argv(src.cfg, Path("/stage/database.dump"))
-    assert "s3cret" not in " ".join(argv)  # password never on the command line
+    assert "changeme" not in " ".join(argv)  # password never on the command line
 
 
 def test_custom_format_argv():

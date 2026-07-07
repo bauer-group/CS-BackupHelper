@@ -6,8 +6,8 @@ from backuphelper.config.interpolation import interpolate, MissingEnvVar
 
 
 def test_replaces_a_simple_placeholder_from_injected_env():
-    env = {"DB_PASSWORD": "s3cret"}
-    assert interpolate("${DB_PASSWORD}", env) == "s3cret"
+    env = {"DB_PASSWORD": "changeme"}
+    assert interpolate("${DB_PASSWORD}", env) == "changeme"
 
 
 def test_replaces_placeholder_embedded_in_a_larger_string():
