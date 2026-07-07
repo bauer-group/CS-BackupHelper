@@ -33,11 +33,17 @@ The compose service points at that image and supplies the job config inline — 
 
 ## Migration checklist (per repo)
 
-1. Repoint the repo's backup Dockerfile `FROM ghcr.io/bauer-group/cs-backuphelper/backuphelper:<ver>` and keep only OCI labels (+ `PG_CLIENT_VERSION` or extra clients if needed).
+1. Repoint the repo's backup Dockerfile `FROM ghcr.io/bauer-group/cs-backuphelper/backuphelper:latest` and keep only OCI labels (+ `PG_CLIENT_VERSION` or extra clients if needed). Track `:latest` so a new engine release flows into the consuming image on its next build.
 2. Move the backup config from the old env vars into `BACKUP_CONFIG_JSON` in the compose service (secrets as `$${VAR}`).
-3. `docker compose run --rm backup --now` and confirm a snapshot + sidecar manifest appear; `backuphelper verify <id>`.
-4. Confirm a restore into a staging target (`restore <id> --force`) before decommissioning the old container.
-5. For app-specific export/restore (n8n CLI, NocoDB REST), add a Source plugin in the meta-layer — see [plugins](plugins.md).
+3. **Reconcile the repo's CI config.** Deleting the old sidecar's `src/<backup>/` sources leaves three config files pointing at paths that no longer exist — this is the step most easily forgotten, and it surfaces as red CI *after* the merge, not during it. Commit these as `ci(backup): …` (not `fix:`, so semantic-release does not mint a release for a config-only reconciliation):
+   - **`.github/config/docker-base-image-monitor/base-images.json`** — the backup image now consumes `backuphelper:latest`, not `python:*-alpine`. Add a `backuphelper` entry (image `ghcr.io/bauer-group/cs-backuphelper/backuphelper`, tag `latest`, variable `BACKUPHELPER_LATEST_DIGEST`). **Keep** the existing python entry *only if* another component in the repo still builds `FROM python` (e.g. IAM's `directory-sync`) — then add alongside it; **otherwise replace** it. A stale-but-green monitor is the trap: it tracks an image nothing builds on and never fires on a real engine release.
+   - **`.github/dependabot.yml`** — remove the `pip` ecosystem entry for the backup dir. The migration deletes `requirements*.txt`, so the pip watcher has no manifest and Dependabot errors with "no manifest found". Leave the `docker` entry (it now inertly tracks the `:latest` base) but correct any stale `python:*-alpine` comment.
+   - **`sonar-project.properties`** (only repos that run Sonar) — `sonar.sources` / `sonar.tests` pointing at the deleted `src/<backup>/{src,tests}` fail Code Quality with `sonar-scanner` exit 3 ("folder does not exist"). Point `sonar.sources` at what survives (e.g. `scripts`) and drop `sonar.tests` if no test folder remains.
+4. `docker compose run --rm backup --now` and confirm a snapshot + sidecar manifest appear; `backuphelper verify <id>`.
+5. Confirm a restore into a staging target (`restore <id> --force`) before decommissioning the old container.
+6. For app-specific export/restore (n8n CLI, NocoDB REST), add a Source plugin in the meta-layer — see [plugins](plugins.md).
+
+> **Transient CI noise vs. real breakage.** Two failures during a migration are *not* repo defects and self-heal on re-run: a first-pull `403 Forbidden` for `backuphelper:latest` right after a fresh publish (the package is **public** — this is GHCR permission propagation), and a `503` from the Sonar scanner (the self-hosted SonarQube server momentarily down). Only a deterministic error tied to a deleted path — e.g. `sonar-scanner` exit 3 on a missing `sonar.tests` folder — is yours to fix. Re-run before reaching for a code change.
 
 ## Target repos
 
