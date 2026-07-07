@@ -44,8 +44,11 @@ Effort to migrate, and what each repo's meta-layer sets (the engine supplies eve
 | medium | `Container-Solution/WordPressStack` | source=[mariadb, filesystem:uploads, filesystem:content] |
 | high | `Container-Solution/n8n` | +nodejs/npm/n8n; n8n-CLI source plugin |
 | high | `Container-Solution/GitHubBackup` | git/LFS/wiki engine stays a GitHub source plugin |
-| high | `Internal-Projects/CanvaBackupRunner` | Canva Connect API source plugin |
 | high | `Internal-Projects/BAUERGROUP.HardwareIDAllocator` | .NET→Python re-platform or NDJSON mode |
+
+> `Internal-Projects/CanvaBackupRunner` is intentionally **out of scope** — it is
+> a standalone SaaS-export runner and stays standalone; it is not migrated onto
+> BackupHelper.
 
 Start with the trivial/low tier (pure DB backups) to prove the model, then the medium tier (DB + files/objects), and finally the high tier where an app-specific exporter becomes a plugin.
 
