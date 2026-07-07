@@ -112,6 +112,20 @@ MySQL 8/9 via the same MySQL-family implementation as `mariadb`. Identical field
 
 **Restore.** Supported, as for `mariadb`.
 
+> **Authentication caveat (MySQL 8.0+).** MySQL 8.0 and later default to the
+> `caching_sha2_password` auth plugin, whose **client-side** plugin the Alpine
+> `mariadb-client` in the image does **not** ship. Connecting to a default
+> MySQL 8/9 fails with `Plugin caching_sha2_password could not be loaded`.
+> Choose one:
+> - Create the backup user with `mysql_native_password`
+>   (`CREATE USER 'backup'@'%' IDENTIFIED WITH mysql_native_password BY '…'`;
+>   on MySQL 8.4+ the plugin must first be enabled server-side), **or**
+> - Add the Oracle `mysql-client` (or `mydumper`) in your meta-Dockerfile for
+>   full `caching_sha2_password` support.
+>
+> MariaDB is unaffected. This is verified end-to-end by `scripts/e2e.sh`
+> (MySQL 8.0 with `mysql_native_password`).
+
 ---
 
 ## `s3`
