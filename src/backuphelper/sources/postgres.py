@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import gzip
 import os
+import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
@@ -113,8 +115,17 @@ def _pg_restore(cfg: PostgresConfig, dump: Path, run: RunFn) -> None:
     env = build_env(cfg)
     argv = build_restore_argv(cfg, dump)
     if "".join(dump.suffixes).endswith(".sql.gz"):
-        with gzip.open(dump, "rb") as gz:
-            result = run(argv, env=env, stdin=gz, capture_output=True, timeout=14400)
+        # gunzip to a real temp file: a subprocess reads the child's stdin fd
+        # directly, so a gzip file object would feed it the *compressed* bytes.
+        with tempfile.NamedTemporaryFile(suffix=".sql", delete=False) as tmp:
+            tmp_name = tmp.name
+            with gzip.open(dump, "rb") as gz:
+                shutil.copyfileobj(gz, tmp)
+        try:
+            with open(tmp_name, "rb") as fh:
+                result = run(argv, env=env, stdin=fh, capture_output=True, timeout=14400)
+        finally:
+            os.unlink(tmp_name)
     else:
         result = run(argv, env=env, capture_output=True, timeout=14400)
     if result.returncode != 0:

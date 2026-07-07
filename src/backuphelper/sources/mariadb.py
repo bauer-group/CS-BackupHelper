@@ -11,6 +11,7 @@ import gzip
 import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
@@ -128,9 +129,22 @@ class MariaDBSource(Source):
                 "--user", self.cfg.user]
         if self.cfg.database:
             argv.append(self.cfg.database)
-        with gzip.open(dumps[0], "rb") as gz:
-            result = self._run(argv, env=self.build_env(), stdin=gz,
-                               capture_output=True, timeout=14400)
+        # gunzip to a real temp file — a subprocess reads the child's stdin fd
+        # directly, so a gzip file object would feed it the *compressed* bytes.
+        result = _run_with_gunzipped_stdin(argv, self.build_env(), dumps[0], self._run)
         if result.returncode != 0:
             msg = (result.stderr or b"").decode("utf-8", "replace").strip()[:500]
             raise SourceError(f"{self.type} restore failed: {msg}")
+
+
+def _run_with_gunzipped_stdin(argv: list[str], env: dict[str, str], gz_path: Path,
+                              run: RunFn) -> subprocess.CompletedProcess:
+    with tempfile.NamedTemporaryFile(suffix=".sql", delete=False) as tmp:
+        tmp_name = tmp.name
+        with gzip.open(gz_path, "rb") as gz:
+            shutil.copyfileobj(gz, tmp)
+    try:
+        with open(tmp_name, "rb") as fh:
+            return run(argv, env=env, stdin=fh, capture_output=True, timeout=14400)
+    finally:
+        os.unlink(tmp_name)

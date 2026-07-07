@@ -89,4 +89,8 @@ def test_restore_runs_client_with_gunzipped_dump(tmp_path):
     argv = run.calls[0][0]
     assert Path(argv[0]).name in ("mariadb", "mysql")
     assert "wordpress" in argv
-    assert run.calls[0][1].get("stdin") is not None  # dump streamed to stdin
+    stdin = run.calls[0][1].get("stdin")
+    assert stdin is not None  # dump streamed to stdin
+    # Must feed a real OS file (decompressed), NOT a GzipFile — a subprocess
+    # reads the child's stdin fd directly and would get the compressed bytes.
+    assert not isinstance(stdin, gzip.GzipFile)
