@@ -1,0 +1,160 @@
+# =============================================================================
+# BackupHelper — End-to-End Test Matrix (infra only; driven by scripts/e2e.sh)
+# =============================================================================
+# Stands up every backup source backend + a MinIO destination so scripts/e2e.sh
+# can run a real backup→restore roundtrip against each engine:
+#
+#   postgres / mariadb / mysql — DB dump + restore
+#   minio (+ assets bucket)    — S3-bucket-source mirror + restore
+#   local files                — filesystem source + restore (writable /files)
+#
+# The `backup` service carries no fixed config; the script passes a per-engine
+# BACKUP_CONFIG_JSON via `docker compose run -e`.
+# =============================================================================
+
+x-logging: &logging
+  logging: { driver: json-file, options: { max-size: "10m", max-file: "1" } }
+
+services:
+
+  postgres:
+    image: postgres:18-alpine
+    container_name: bh-e2e_POSTGRES
+    hostname: postgres
+    <<: *logging
+    environment:
+      POSTGRES_DB: app
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: devpassword
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    networks: [e2e]
+
+  mariadb:
+    image: mariadb:11
+    container_name: bh-e2e_MARIADB
+    hostname: mariadb
+    <<: *logging
+    environment:
+      MARIADB_DATABASE: app
+      MARIADB_USER: app
+      MARIADB_PASSWORD: devpassword
+      MARIADB_ROOT_PASSWORD: rootpw
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    networks: [e2e]
+
+  mysql:
+    image: mysql:8.0
+    container_name: bh-e2e_MYSQL
+    hostname: mysql
+    <<: *logging
+    # IMPORTANT: MySQL 8.0+ defaults to caching_sha2_password, whose CLIENT
+    # plugin the alpine mariadb-client does NOT ship — so it cannot authenticate
+    # to a default MySQL 8/9. Here we force mysql_native_password so the app user
+    # is created with an auth the mariadb-client supports (this option exists in
+    # 8.0 but was removed in 8.4). In production, either create the backup user
+    # with mysql_native_password, or add the Oracle mysql-client in a
+    # meta-Dockerfile for caching_sha2 support. See docs/sources.md.
+    command: --default-authentication-plugin=mysql_native_password
+    environment:
+      MYSQL_DATABASE: app
+      MYSQL_USER: app
+      MYSQL_PASSWORD: devpassword
+      MYSQL_ROOT_PASSWORD: rootpw
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-prootpw"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks: [e2e]
+
+  minio:
+    image: ghcr.io/bauer-group/cs-minio/minio:latest
+    container_name: bh-e2e_MINIO
+    hostname: minio
+    <<: *logging
+    command: server --address ":9000" --console-address ":9090" /data
+    environment:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: minioadmin-dev
+      MINIO_REGION_NAME: eu-central-1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 15s
+    networks: [e2e]
+
+  minio-init:
+    image: ghcr.io/bauer-group/cs-minio/minio-init:latest
+    container_name: bh-e2e_MINIO_INIT
+    restart: "no"
+    <<: *logging
+    environment:
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: minioadmin-dev
+      CONSOLE_USER: console-admin
+      CONSOLE_PASSWORD: console-dev-pass
+    configs:
+      - source: minio-init-config
+        target: /app/config/init.json
+    depends_on:
+      minio: { condition: service_healthy }
+    networks: [e2e]
+
+  backup:
+    build: { context: . }
+    image: backuphelper:e2e
+    <<: *logging
+    environment:
+      BACKUP_DATA_DIR: /data
+      BACKUP_LOG_LEVEL: INFO
+    volumes:
+      - e2e-data:/data
+      - e2e-files:/files
+    networks: [e2e]
+
+configs:
+  minio-init-config:
+    content: |
+      {
+        "$$schema": "https://raw.githubusercontent.com/bauer-group/CS-MinIO/main/init.schema.json",
+        "_description": "BackupHelper E2E — backups (dest) + assets (s3-source) buckets + scoped user.",
+        "buckets": [
+          {"name": "backups", "region": "eu-central-1", "versioning": false, "policy": "private"},
+          {"name": "assets",  "region": "eu-central-1", "versioning": false, "policy": "private"}
+        ],
+        "policies": [
+          {"name": "pBackup", "statements": [
+            {"Effect": "Allow",
+             "Action": ["s3:GetObject","s3:PutObject","s3:DeleteObject","s3:GetObjectTagging","s3:PutObjectTagging","s3:AbortMultipartUpload"],
+             "Resource": ["arn:aws:s3:::backups/*","arn:aws:s3:::assets/*"]},
+            {"Effect": "Allow",
+             "Action": ["s3:ListBucket","s3:GetBucketLocation"],
+             "Resource": ["arn:aws:s3:::backups","arn:aws:s3:::assets"]}
+          ]}
+        ],
+        "groups": [{"name": "gBackup", "policies": ["pBackup"]}],
+        "users": [{"access_key": "backup-app", "secret_key": "backup-secret-dev", "groups": ["gBackup"]}]
+      }
+
+networks:
+  e2e:
+    driver: bridge
+    name: bh-e2e
+
+volumes:
+  e2e-data:
+  e2e-files:

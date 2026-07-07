@@ -1,0 +1,23 @@
+{
+  "instance_name": "wordpress",
+  "jobs": [
+    {
+      "name": "main",
+      "sources": [
+        {"type": "mariadb", "host": "database", "port": 3306, "database": "wordpress",
+         "user": "wordpress", "password": "${DB_PASSWORD}"},
+        {"type": "filesystem", "name": "uploads", "path": "/var/www/html/wp-content/uploads"},
+        {"type": "filesystem", "name": "content", "path": "/var/www/html/wp-content",
+         "subdirs": ["plugins", "themes", "languages"]}
+      ],
+      "destinations": [
+        {"type": "local"},
+        {"type": "s3", "endpoint": "https://minio.internal:9000", "bucket": "offsite",
+         "access_key": "${S3_ACCESS_KEY}", "secret_key": "${S3_SECRET_KEY}",
+         "prefix": "wordpress/", "force_path_style": true}
+      ],
+      "schedule": {"mode": "cron", "cron": "0 2 * * *"},
+      "retention": {"count": 30, "age_days": 180, "smart_last": true}
+    }
+  ]
+}

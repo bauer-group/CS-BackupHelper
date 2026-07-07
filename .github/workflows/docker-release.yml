@@ -1,0 +1,150 @@
+name: 🚀 Release & Docker Build
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '.github/**'
+      - '*.md'
+      - 'docs/**'
+      - 'examples/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'pyproject.toml'
+      - 'Dockerfile'
+      - 'docker-compose*.yml'
+      - '.dockerignore'
+      - '.env.example'
+  workflow_dispatch:
+    inputs:
+      force-release:
+        description: 'force create release'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  packages: write
+  security-events: write
+
+jobs:
+  # ============================================
+  # Validation Jobs
+  # ============================================
+
+  validate-compose:
+    name: 🔍 Validate Docker Compose
+    uses: bauer-group/automation-templates/.github/workflows/modules-validate-compose.yml@main
+    with:
+      # Sidecar is the shipped deliverable of this repo; the standalone example's
+      # database exists only for local testing, so CI validates the sidecar file.
+      compose-file: 'docker-compose.sidecar.yml'
+      env-file: '.env.example'
+      # `backup` is deliberately profiles:[backup] (on-demand), so it is absent
+      # from `docker compose config` and cannot be a required service here. This
+      # is a syntax/render check; once the shared workflow is profile-aware it
+      # can assert 'backup' via an activated profile.
+      validate-services: '[]'
+
+  validate-scripts:
+    name: 🔍 Validate Shell Scripts
+    uses: bauer-group/automation-templates/.github/workflows/modules-validate-shellscript.yml@main
+    with:
+      scan-directory: '.'
+      severity: 'error'
+
+  test:
+    name: 🧪 Pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - name: Install
+        run: pip install -e ".[test]"
+      - name: Run tests
+        run: pytest tests/ -q
+
+  # ============================================
+  # Release Job (only on main branch push)
+  # ============================================
+
+  release:
+    name: 📦 Create Semantic Release
+    needs: [validate-compose, validate-scripts, test]
+    if: |
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      needs.validate-compose.result == 'success' &&
+      needs.validate-scripts.result == 'success' &&
+      needs.test.result == 'success'
+    uses: bauer-group/automation-templates/.github/workflows/modules-semantic-release.yml@main
+    with:
+      target-branch: 'main'
+      dry-run: false
+      force-release: ${{ inputs.force-release || false }}
+    secrets: inherit
+
+  # ============================================
+  # Docker Build & Push (backuphelper — the central image)
+  # ============================================
+
+  docker-build-release:
+    name: 🐳 Build & Push backuphelper
+    needs: release
+    if: needs.release.outputs.release-created == 'true'
+    uses: bauer-group/automation-templates/.github/workflows/docker-build.yml@main
+    with:
+      deploy-environment: 'production'
+      publish-to: 'ghcr'
+      ghcr-image-name: 'bauer-group/CS-BackupHelper/backuphelper'
+      docker-image-name: 'bauergroup/backuphelper'
+
+      release-version: ${{ needs.release.outputs.version }}
+      image-tags: 'stable'
+
+      update-dockerfile-version: true
+      auto-tags: true
+      latest-tag: true
+
+      dockerfile-path: './Dockerfile'
+      docker-context: '.'
+      platforms: 'linux/amd64,linux/arm64'
+
+      push: true
+
+      security-scan: false
+      security-fail-on: 'CRITICAL'
+      generate-sbom: true
+      sync-dockerhub-readme: true
+    secrets: inherit
+
+  docker-build-pr:
+    name: 🔨 Validate backuphelper Build (PR)
+    needs: [validate-compose, validate-scripts, test]
+    if: |
+      github.event_name == 'pull_request' &&
+      needs.validate-compose.result == 'success' &&
+      needs.validate-scripts.result == 'success' &&
+      needs.test.result == 'success'
+    uses: bauer-group/automation-templates/.github/workflows/docker-build.yml@main
+    with:
+      publish-to: 'ghcr'
+      ghcr-image-name: 'bauer-group/CS-BackupHelper/backuphelper'
+
+      auto-tags: true
+      dockerfile-path: './Dockerfile'
+      docker-context: '.'
+      platforms: 'linux/amd64'
+
+      push: false
+
+      security-scan: false
+      security-fail-on: 'CRITICAL'
+    secrets: inherit

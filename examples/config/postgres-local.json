@@ -1,0 +1,15 @@
+{
+  "instance_name": "myapp",
+  "jobs": [
+    {
+      "name": "main",
+      "sources": [
+        {"type": "postgres", "host": "database", "port": 5432, "database": "myapp",
+         "user": "myapp", "password": "${DB_PASSWORD}", "dump_format": "custom"}
+      ],
+      "destinations": [{"type": "local"}],
+      "schedule": {"mode": "cron", "cron": "15 3 * * *"},
+      "retention": {"count": 14}
+    }
+  ]
+}

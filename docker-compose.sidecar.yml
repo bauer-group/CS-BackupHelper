@@ -1,0 +1,103 @@
+# =============================================================================
+# BackupHelper — Sidecar Example (attach to an existing app stack)
+# =============================================================================
+# Usage:  docker compose -f docker-compose.sidecar.yml up -d
+#
+# What this shows:
+#   - Adding BackupHelper to an EXISTING stack that already runs its own
+#     database and MinIO on a shared/external network.
+#   - The whole config supplied as a MOUNTED FILE via a Compose `configs:`
+#     block (content inlined here — still no separate host file to manage).
+#     $${VAR} placeholders are resolved by the container from its environment.
+#   - Two sources bundled atomically: the app's Postgres DB + its S3 bucket
+#     (mirrored WITH per-object metadata), with optional age encryption before
+#     the off-site upload.
+#
+# Prerequisites:
+#   - An external Docker network `${APP_NETWORK}` that the app's `database`
+#     and `minio` services are attached to.
+# =============================================================================
+
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "50m"
+      max-file: "3"
+
+services:
+
+  backup:
+    image: ${BACKUP_IMAGE:-ghcr.io/bauer-group/cs-backuphelper/backuphelper}:${BACKUP_VERSION:-latest}
+    container_name: ${STACK_NAME:-app}_BACKUP
+    hostname: backup
+    profiles: ["backup"]
+    restart: unless-stopped
+    <<: *logging
+    environment:
+      TZ: ${TIME_ZONE:-Etc/UTC}
+      BACKUP_DATA_DIR: /data
+      BACKUP_CONFIG_FILE: /config/backup.json
+      # Secrets resolved by the container (referenced as $${VAR} in the config).
+      DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD}
+      SOURCE_S3_SECRET_KEY: ${SOURCE_S3_SECRET_KEY:?Set SOURCE_S3_SECRET_KEY}
+      BACKUP_S3_SECRET_KEY: ${BACKUP_S3_SECRET_KEY:-}
+    configs:
+      - source: backup-config
+        target: /config/backup.json
+    volumes:
+      - backup-data:/data
+    healthcheck:
+      test: ["CMD", "backuphelper", "healthcheck"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "${BACKUP_CPU_LIMIT:-1.0}"
+          memory: ${BACKUP_MEM_LIMIT:-512M}
+    networks:
+      - app
+
+# Inline config mounted as /config/backup.json. Note the doubled $$ so Compose
+# leaves ${VAR} literal for BackupHelper to resolve at runtime.
+configs:
+  backup-config:
+    content: |
+      {
+        "instance_name": "${STACK_NAME:-app}",
+        "jobs": [{
+          "name": "main",
+          "sources": [
+            {"type": "postgres", "host": "database", "database": "${DB_NAME:-app}",
+             "user": "${DB_USER:-app}", "password": "$${DB_PASSWORD}"},
+            {"type": "s3", "name": "attachments", "endpoint": "${SOURCE_S3_ENDPOINT:-http://minio:9000}",
+             "bucket": "${SOURCE_S3_BUCKET:-app}", "access_key": "${SOURCE_S3_ACCESS_KEY:-app}",
+             "secret_key": "$${SOURCE_S3_SECRET_KEY}", "force_path_style": true}
+          ],
+          "destinations": [
+            {"type": "local"},
+            {"type": "s3", "endpoint": "${BACKUP_S3_ENDPOINT:-}", "bucket": "${BACKUP_S3_BUCKET:-}",
+             "access_key": "${BACKUP_S3_ACCESS_KEY:-}", "secret_key": "$${BACKUP_S3_SECRET_KEY}",
+             "region": "${BACKUP_S3_REGION:-eu-central-1}", "prefix": "${BACKUP_S3_PREFIX:-app/}"}
+          ],
+          "schedule": {"mode": "cron", "cron": "${BACKUP_CRON:-15 3 * * *}"},
+          "retention": {"count": 14, "age_days": 90,
+                        "gfs": {"daily": 7, "weekly": 4, "monthly": 6}},
+          "encryption": {"mode": "${BACKUP_ENCRYPTION_MODE:-none}",
+                         "recipient": "${BACKUP_ENCRYPTION_RECIPIENT:-}"},
+          "notifications": {"channels": ${BACKUP_ALERT_CHANNELS:-["healthchecks"]},
+                            "level": "${BACKUP_ALERT_LEVEL:-warnings}",
+                            "healthchecks": {"url": "${BACKUP_HEALTHCHECKS_URL:-}"}}
+        }]
+      }
+
+networks:
+  app:
+    name: ${APP_NETWORK:-app}
+    external: true
+
+volumes:
+  backup-data:

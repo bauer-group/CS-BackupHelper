@@ -1,0 +1,29 @@
+# =============================================================================
+# Docker Maintenance — Auto-merge Dependabot PRs (base image)
+# =============================================================================
+# When Dependabot opens a PR bumping the base image in ./Dockerfile
+# (python:3.14-alpine), this workflow auto-approves and merges it after
+# validation passes, which then triggers docker-release.yml to build and push
+# the updated image.
+# =============================================================================
+
+name: 🔧 Docker Maintenance
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'Dockerfile'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  maintenance:
+    name: Auto-merge Dependabot PRs
+    uses: bauer-group/automation-templates/.github/workflows/docker-maintenance-dependabot.yml@main
+    with:
+      merge-method: 'squash'
+      auto-approve: true
+    secrets: inherit
