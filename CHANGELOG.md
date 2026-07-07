@@ -1,3 +1,9 @@
+## [1.1.0](https://github.com/bauer-group/CS-BackupHelper/compare/v1.0.2...v1.1.0) (2026-07-07)
+
+### 🚀 Features
+
+* **config:** accepted a comma-separated string for notification channels ([8a3970e](https://github.com/bauer-group/CS-BackupHelper/commit/8a3970e91db07ff045dbc34fde168a344e34dcd9))
+
 ## [1.0.2](https://github.com/bauer-group/CS-BackupHelper/compare/v1.0.1...v1.0.2) (2026-07-07)
 
 ### 🐛 Bug Fixes
