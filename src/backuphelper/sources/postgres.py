@@ -28,7 +28,10 @@ class PostgresConfig(BaseModel):
     ssl_mode: str = "disable"
     dump_format: str = "custom"  # custom | plain
     timeout: int = Field(default=1800, ge=1, le=14400)
-    name: str = "database"  # component name
+    name: Optional[str] = None  # component name; defaults to the database name
+
+    def component_name(self) -> str:
+        return self.name or self.database or "database"
 
 
 def build_env(cfg: PostgresConfig) -> dict[str, str]:
@@ -64,7 +67,7 @@ class PostgresSource(Source):
     def produce(self, staging_dir: Path) -> list[StagedComponent]:
         staging_dir.mkdir(parents=True, exist_ok=True)
         suffix = ".dump" if self.cfg.dump_format == "custom" else ".sql.gz"
-        out = staging_dir / f"{self.cfg.name}{suffix}"
+        out = staging_dir / f"{self.cfg.component_name()}{suffix}"
         env = build_env(self.cfg)
         argv = build_dump_argv(self.cfg, out)
         meta = {"format": self.cfg.dump_format, "database": self.cfg.database}
@@ -81,18 +84,18 @@ class PostgresSource(Source):
                     gz.write(result.stdout or b"")
         except subprocess.TimeoutExpired:
             return [self._error(out, b"pg_dump timed out", meta)]
-        return [StagedComponent(name=self.cfg.name, kind=self.type, path=out, metadata=meta)]
+        return [StagedComponent(name=self.cfg.component_name(), kind=self.type, path=out, metadata=meta)]
 
     def _error(self, out: Path, stderr: bytes, meta: dict) -> StagedComponent:
         out.unlink(missing_ok=True)
         msg = (stderr or b"").decode("utf-8", "replace").strip()[:500] or "pg_dump failed"
-        return StagedComponent(name=self.cfg.name, kind=self.type, path=None,
+        return StagedComponent(name=self.cfg.component_name(), kind=self.type, path=None,
                                metadata=meta, error=f"pg_dump failed: {msg}")
 
     def restore(self, staged_dir: Path) -> None:
-        dumps = sorted(Path(staged_dir).glob(f"{self.cfg.name}.*"))
+        dumps = sorted(Path(staged_dir).glob(f"{self.cfg.component_name()}.*"))
         if not dumps:
-            raise SourceError(f"no {self.cfg.name}.* dump found in {staged_dir}")
+            raise SourceError(f"no {self.cfg.component_name()}.* dump found in {staged_dir}")
         _pg_restore(self.cfg, dumps[0], self._run)
 
 

@@ -103,7 +103,12 @@ def test_restore_argv_for_plain_sql():
 
 
 def test_restore_runs_pg_restore_for_dump(tmp_path):
-    (tmp_path / "database.dump").write_bytes(b"x")
+    # component name defaults to the database name ("logto")
+    (tmp_path / "logto.dump").write_bytes(b"x")
     run = _FakeRun()
     PostgresSource(_cfg(), run=run).restore(tmp_path)
     assert run.calls and run.calls[0][0] == "pg_restore"
+
+
+def test_component_name_defaults_to_database_name():
+    assert PostgresSource(_cfg(database="mydb")).cfg.component_name() == "mydb"
