@@ -60,7 +60,7 @@ services:
 
   # ── BackupHelper (the backup engine) ───────────────────────────────────────
   backup:
-    image: ${BACKUP_IMAGE:-ghcr.io/bauer-group/backuphelper}:${BACKUP_VERSION:-latest}
+    image: ${BACKUP_IMAGE:-ghcr.io/bauer-group/cs-backuphelper/backuphelper}:${BACKUP_VERSION:-latest}
     container_name: ${STACK_NAME:-app}_BACKUP
     hostname: backup
     profiles: ["backup"]

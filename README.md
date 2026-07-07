@@ -94,7 +94,7 @@ Ready-to-adapt configs for common cases live in [examples/config/](examples/conf
 Replace a repo's bespoke backup container with a ~20-line meta-Dockerfile:
 
 ```dockerfile
-FROM ghcr.io/bauer-group/backuphelper:1
+FROM ghcr.io/bauer-group/cs-backuphelper/backuphelper:1
 ARG PG_CLIENT_VERSION=18
 LABEL org.opencontainers.image.title="MyApp Backup"
 # Sources/destinations/schedule come from env or BACKUP_CONFIG_JSON in compose.

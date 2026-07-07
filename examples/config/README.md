@@ -25,5 +25,5 @@ export BACKUP_CONFIG_JSON_BASE64="$(base64 -w0 postgres-s3.json)"
 # mounted file
 docker run -v "$PWD/postgres-s3.json:/config/backup.json:ro" \
   -e BACKUP_CONFIG_FILE=/config/backup.json \
-  ghcr.io/bauer-group/backuphelper:latest --now
+  ghcr.io/bauer-group/cs-backuphelper/backuphelper:latest --now
 ```

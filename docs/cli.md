@@ -19,7 +19,7 @@ Every example below is shown twice. The two forms are equivalent — the compose
 docker run --rm \
   --env-file .env \
   -v backup-data:/data \
-  ghcr.io/bauer-group/backuphelper:latest <command> [args]
+  ghcr.io/bauer-group/cs-backuphelper/backuphelper:latest <command> [args]
 
 # docker compose: reuse the 'backup' service definition as-is
 docker compose run --rm backup <command> [args]
@@ -52,12 +52,12 @@ The default callback. With no subcommand it loads config, configures logging, an
 ```bash
 # Start the scheduler (this is the container's default CMD)
 docker run --rm --env-file .env -v backup-data:/data \
-  ghcr.io/bauer-group/backuphelper:latest
+  ghcr.io/bauer-group/cs-backuphelper/backuphelper:latest
 docker compose up -d backup
 
 # Force one immediate run of all jobs, then exit
 docker run --rm --env-file .env -v backup-data:/data \
-  ghcr.io/bauer-group/backuphelper:latest --now
+  ghcr.io/bauer-group/cs-backuphelper/backuphelper:latest --now
 docker compose run --rm backup --now
 ```
 
@@ -69,7 +69,7 @@ Runs every configured job once, now. Functionally identical to `--now` — a sub
 
 ```bash
 docker run --rm --env-file .env -v backup-data:/data \
-  ghcr.io/bauer-group/backuphelper:latest create
+  ghcr.io/bauer-group/cs-backuphelper/backuphelper:latest create
 docker compose run --rm backup create
 ```
 
@@ -81,7 +81,7 @@ Lists local snapshots discovered in the data dir. Each row is the snapshot id an
 
 ```bash
 docker run --rm -v backup-data:/data \
-  ghcr.io/bauer-group/backuphelper:latest list
+  ghcr.io/bauer-group/cs-backuphelper/backuphelper:latest list
 docker compose run --rm backup list
 ```
 
@@ -97,7 +97,7 @@ Prints the sidecar manifest (`<id>.manifest.json`) for one snapshot — the comp
 
 ```bash
 docker run --rm -v backup-data:/data \
-  ghcr.io/bauer-group/backuphelper:latest show 2026-07-05_03-15-00
+  ghcr.io/bauer-group/cs-backuphelper/backuphelper:latest show 2026-07-05_03-15-00
 docker compose run --rm backup show 2026-07-05_03-15-00
 ```
 
@@ -113,7 +113,7 @@ Recomputes the archive's sha256 and compares it against `archive_sha256` in the 
 
 ```bash
 docker run --rm -v backup-data:/data \
-  ghcr.io/bauer-group/backuphelper:latest verify 2026-07-05_03-15-00
+  ghcr.io/bauer-group/cs-backuphelper/backuphelper:latest verify 2026-07-05_03-15-00
 docker compose run --rm backup verify 2026-07-05_03-15-00
 ```
 
@@ -133,7 +133,7 @@ Exit codes: `0` archive matches manifest · `2` mismatch, missing archive, or mi
 ```bash
 # Restore everything for the (single) configured job, no prompt
 docker run --rm --env-file .env -v backup-data:/data \
-  ghcr.io/bauer-group/backuphelper:latest restore 2026-07-05_03-15-00 --force
+  ghcr.io/bauer-group/cs-backuphelper/backuphelper:latest restore 2026-07-05_03-15-00 --force
 docker compose run --rm backup restore 2026-07-05_03-15-00 --force
 
 # Restore only the filesystem 'uploads' component of a named job
@@ -173,7 +173,7 @@ Copies a snapshot's archive and sidecar manifest out of the data dir into a targ
 
 ```bash
 docker run --rm -v backup-data:/data -v "$PWD/export":/export \
-  ghcr.io/bauer-group/backuphelper:latest download 2026-07-05_03-15-00 /export
+  ghcr.io/bauer-group/cs-backuphelper/backuphelper:latest download 2026-07-05_03-15-00 /export
 docker compose run --rm -v "$PWD/export":/export backup \
   download 2026-07-05_03-15-00 /export
 ```

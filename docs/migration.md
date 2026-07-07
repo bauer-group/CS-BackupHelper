@@ -9,7 +9,7 @@ The fleet's backup sidecars drifted: some sign webhooks with HMAC, others send t
 Each repo keeps its Dockerfile, reduced to a meta-layer:
 
 ```dockerfile
-FROM ghcr.io/bauer-group/backuphelper:1
+FROM ghcr.io/bauer-group/cs-backuphelper/backuphelper:1
 ARG PG_CLIENT_VERSION=18
 LABEL org.opencontainers.image.title="CS-IAMStack Database-Backup"
 LABEL org.opencontainers.image.source="https://github.com/bauer-group/CS-IAMStack"
@@ -20,7 +20,7 @@ The compose service points at that image and supplies the job config inline — 
 
 ## Migration checklist (per repo)
 
-1. Repoint the repo's backup Dockerfile `FROM ghcr.io/bauer-group/backuphelper:<ver>` and keep only OCI labels (+ `PG_CLIENT_VERSION` or extra clients if needed).
+1. Repoint the repo's backup Dockerfile `FROM ghcr.io/bauer-group/cs-backuphelper/backuphelper:<ver>` and keep only OCI labels (+ `PG_CLIENT_VERSION` or extra clients if needed).
 2. Move the backup config from the old env vars into `BACKUP_CONFIG_JSON` in the compose service (secrets as `$${VAR}`).
 3. `docker compose run --rm backup --now` and confirm a snapshot + sidecar manifest appear; `backuphelper verify <id>`.
 4. Confirm a restore into a staging target (`restore <id> --force`) before decommissioning the old container.

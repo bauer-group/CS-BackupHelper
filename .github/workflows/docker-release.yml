@@ -97,7 +97,7 @@ jobs:
     with:
       deploy-environment: 'production'
       publish-to: 'ghcr'
-      ghcr-image-name: 'bauer-group/BackupHelper'
+      ghcr-image-name: 'bauer-group/CS-BackupHelper/backuphelper'
       docker-image-name: 'bauergroup/backuphelper'
 
       release-version: ${{ needs.release.outputs.version }}
@@ -130,7 +130,7 @@ jobs:
     uses: bauer-group/automation-templates/.github/workflows/docker-build.yml@main
     with:
       publish-to: 'ghcr'
-      ghcr-image-name: 'bauer-group/BackupHelper'
+      ghcr-image-name: 'bauer-group/CS-BackupHelper/backuphelper'
 
       auto-tags: true
       dockerfile-path: './Dockerfile'

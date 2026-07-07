@@ -6,7 +6,7 @@
 #  retention, notifications, optional client-side encryption and a restore CLI.
 #
 #  This is the CENTRAL image. Consuming repos ship a ~20-line meta-Dockerfile
-#  `FROM ghcr.io/bauer-group/backuphelper:<ver>` that only sets labels, pins DB
+#  `FROM ghcr.io/bauer-group/cs-backuphelper/backuphelper:<ver>` that only sets labels, pins DB
 #  client majors, and (optionally) adds app-specific Source plugins.
 #
 #  Build    : multi-stage with an integrated pytest gate — the prod image cannot
@@ -57,7 +57,7 @@ LABEL org.opencontainers.image.description="Central pluggable backup engine — 
 LABEL org.opencontainers.image.vendor="BAUER GROUP"
 LABEL org.opencontainers.image.authors="Karl Bauer <kb@de.bauer-group.com>"
 LABEL org.opencontainers.image.licenses="MIT"
-LABEL org.opencontainers.image.source="https://github.com/bauer-group/BackupHelper"
+LABEL org.opencontainers.image.source="https://github.com/bauer-group/CS-BackupHelper"
 LABEL org.opencontainers.image.base.name="docker.io/library/python:3.14-alpine"
 LABEL org.opencontainers.image.version="${IMAGE_VERSION}"
 
