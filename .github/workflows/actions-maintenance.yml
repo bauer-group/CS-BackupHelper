@@ -1,0 +1,34 @@
+# =============================================================================
+# Actions Maintenance — Auto-merge Dependabot PRs (GitHub Actions)
+# =============================================================================
+# When Dependabot opens a PR bumping a GitHub Action version inside
+# .github/workflows/** (e.g. actions/checkout, actions/setup-python), this
+# workflow auto-approves and enables native auto-merge. GitHub merges once all
+# required status checks pass.
+#
+# Mirrors docker-maintenance.yml (base image) — same reusable module, scoped to
+# the workflow files instead of the Dockerfile. Keeps external Action pins from
+# silently drifting out of date (the checkout@v5 → @v7 drift that surfaced as a
+# stale open PR is exactly what this closes automatically going forward).
+# =============================================================================
+
+name: ⚙️ Actions Maintenance
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - '.github/workflows/**'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  maintenance:
+    name: Auto-merge Dependabot PRs
+    uses: bauer-group/automation-templates/.github/workflows/docker-maintenance-dependabot.yml@main
+    with:
+      merge-method: 'squash'
+      auto-approve: true
+    secrets: inherit
