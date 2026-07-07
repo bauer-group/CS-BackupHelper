@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class SourceSpec(BaseModel):
@@ -93,6 +93,15 @@ class NtfyChannelConfig(BaseModel):
 class NotifyConfig(BaseModel):
     channels: list[str] = Field(default_factory=list)
     level: Literal["errors", "warnings", "all"] = "warnings"
+
+    @field_validator("channels", mode="before")
+    @classmethod
+    def _split_channels(cls, v: object) -> object:
+        # Accept a comma-separated string ("email,webhook") as well as a list,
+        # so the fleet's existing ALERT_CHANNELS env values migrate unchanged.
+        if isinstance(v, str):
+            return [c.strip() for c in v.split(",") if c.strip()]
+        return v
     email: EmailChannelConfig = Field(default_factory=EmailChannelConfig)
     webhook: WebhookChannelConfig = Field(default_factory=WebhookChannelConfig)
     teams: TeamsChannelConfig = Field(default_factory=TeamsChannelConfig)

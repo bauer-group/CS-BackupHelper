@@ -44,6 +44,13 @@ def test_destination_type_is_restricted_to_local_or_s3():
         DestinationSpec.model_validate({"type": "ftp"})
 
 
+def test_notify_channels_accept_comma_string():
+    from backuphelper.config.models import NotifyConfig
+    assert NotifyConfig(channels="email, webhook ,teams").channels == ["email", "webhook", "teams"]
+    assert NotifyConfig(channels="").channels == []
+    assert NotifyConfig(channels=["email"]).channels == ["email"]  # list still works
+
+
 def test_retention_defaults():
     r = RetentionConfig()
     assert r.count == 14
