@@ -264,6 +264,12 @@ def _produce(job: Job, staging: Path, errors: list[str]) -> list[Component]:
     components: list[Component] = []
     for spec in job.sources:
         data = spec.model_dump()
+        if not data.get("enabled", True):
+            # Generic config-deactivation toggle: a source with "enabled": false is
+            # simply not run (maps app include-toggles like BACKUP_INCLUDE_FILES /
+            # BACKUP_DATABASE_DUMP=false onto the shared engine without hardcoding them).
+            log.info("source %s disabled by config — skipping", data.get("name") or spec.type)
+            continue
         if spec.type == "s3" and not data.get("bucket"):
             # "S3 source if configured, else skip" — an s3 source with no bucket is
             # simply not activated (mirrors the s3-destination behaviour), so a

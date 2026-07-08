@@ -134,6 +134,23 @@ def test_unconfigured_s3_source_is_skipped(tmp_path):
     assert "s3" not in {c.kind for c in m.components}
 
 
+def test_disabled_source_is_skipped(tmp_path):
+    # A source with "enabled": false is a config-deactivated toggle (e.g. NocoDB's
+    # BACKUP_INCLUDE_FILES / BACKUP_DATABASE_DUMP=false) — it must be skipped
+    # cleanly, not produced, and must not degrade the run to a warning.
+    data = tmp_path / "data"
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "x.txt").write_text("X")
+    job = _fs_job(tmp_path)
+    job.sources.append(SourceSpec(type="filesystem", name="other", path=str(other), enabled=False))
+    result = run_job(job, data_dir=data, instance_name="i", now=NOW, snapshot_id="d1")
+    assert result.status == "success"
+    m = read_manifest(sidecar_path(data, "d1"))
+    assert "other" not in {c.name for c in m.components}
+    assert "uploads" in {c.name for c in m.components}  # enabled sources still run
+
+
 def test_run_leaves_no_work_artifacts_in_data_dir(tmp_path):
     data = tmp_path / "data"
     run_job(_fs_job(tmp_path), data_dir=data, instance_name="i", now=NOW, snapshot_id="s9")
