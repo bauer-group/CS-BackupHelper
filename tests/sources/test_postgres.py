@@ -102,6 +102,25 @@ def test_restore_argv_for_plain_sql():
     assert argv[0] == "psql"
 
 
+def test_dump_argv_excludes_table_data_both_formats():
+    # Keep a table's STRUCTURE but drop its row DATA (truncate effect) — used to
+    # strip n8n execution history from the dump while preserving the schema.
+    from backuphelper.sources.postgres import PostgresConfig, build_dump_argv
+    for fmt, dump in (("custom", "/x/db.dump"), ("plain", "/x/db.sql")):
+        cfg = PostgresConfig(dump_format=fmt,
+                             exclude_table_data=["execution_entity", "execution_data"])
+        argv = build_dump_argv(cfg, Path(dump))
+        assert "--exclude-table-data=execution_entity" in argv
+        assert "--exclude-table-data=execution_data" in argv
+
+
+def test_exclude_table_data_accepts_csv():
+    from backuphelper.sources.postgres import PostgresConfig
+    assert PostgresConfig(exclude_table_data="execution_entity, execution_data").exclude_table_data == [
+        "execution_entity", "execution_data"]
+    assert PostgresConfig().exclude_table_data == []
+
+
 def test_plain_restore_stops_on_first_error():
     # A plain psql restore must fail loudly (ON_ERROR_STOP=1) instead of swallowing
     # per-statement errors and exiting 0 — otherwise a restore onto a non-empty DB

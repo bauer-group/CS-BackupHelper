@@ -14,7 +14,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .base import Source, SourceError, StagedComponent
 
@@ -31,6 +31,17 @@ class PostgresConfig(BaseModel):
     dump_format: str = "custom"  # custom | plain
     timeout: int = Field(default=1800, ge=1, le=14400)
     name: Optional[str] = None  # component name; defaults to the database name
+    # Tables whose ROW DATA is dropped from the dump while the STRUCTURE is kept
+    # (pg_dump --exclude-table-data) — e.g. n8n execution history: restore the
+    # empty tables, not the bulky rows. Accepts a CSV string or a list.
+    exclude_table_data: list[str] = Field(default_factory=list)
+
+    @field_validator("exclude_table_data", mode="before")
+    @classmethod
+    def _csv_or_list(cls, v: object) -> object:
+        if isinstance(v, str):
+            return [p.strip() for p in v.split(",") if p.strip()]
+        return v
 
     def component_name(self) -> str:
         return self.name or self.database or "database"
@@ -50,12 +61,14 @@ def build_env(cfg: PostgresConfig) -> dict[str, str]:
 
 
 def build_dump_argv(cfg: PostgresConfig, out_path: Path) -> list[str]:
+    # Keep each excluded table's schema but drop its data (structure-only).
+    exclude = [f"--exclude-table-data={t}" for t in cfg.exclude_table_data]
     if cfg.dump_format == "custom":
         return [
             "pg_dump", "--format=custom", "--compress=6",
-            "--no-owner", "--no-acl", "--file", str(out_path),
+            "--no-owner", "--no-acl", *exclude, "--file", str(out_path),
         ]
-    return ["pg_dump", "--format=plain", "--no-owner", "--no-acl"]
+    return ["pg_dump", "--format=plain", "--no-owner", "--no-acl", *exclude]
 
 
 class PostgresSource(Source):
