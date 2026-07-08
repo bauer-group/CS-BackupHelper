@@ -142,6 +142,61 @@ USER backup
 - A plugin that fails to load is skipped, not fatal: a broken third-party plugin
   cannot break discovery of the others.
 
+## CLI command plugins
+
+A Source plugin says _what to capture_; a **command plugin** adds _app-specific
+operator subcommands_ under the engine CLI — for restores the generic engine
+cannot express (NocoDB's schema/record/attachment reimport, n8n's `import:*`).
+The engine mounts them without being forked.
+
+**1 — build a `typer.Typer` group.** Each `@app.command` becomes a subcommand:
+
+```python
+import typer
+
+app = typer.Typer(name="nocodb", help="NocoDB REST-API restore commands.")
+
+
+@app.command("restore-schema")
+def restore_schema(snapshot_id: str, force: bool = typer.Option(False, "--force")):
+    ...
+```
+
+**2 — register it** under the `backuphelper.commands` entry-point group. The
+entry point may resolve to the `Typer` directly or to a zero-arg factory that
+returns one:
+
+```toml
+[project.entry-points."backuphelper.commands"]
+nocodb = "nocodb_backup_ext.commands:app"
+```
+
+**3 — use it.** After the plugin is `pip install`ed, the engine discovers and
+mounts the group at CLI startup, so it appears as a nested command:
+
+```bash
+backuphelper nocodb restore-schema <snapshot-id> --base MyBase
+```
+
+### Discovery and safety
+
+`backuphelper.plugins.commands.register_command_plugins(app)` runs once at the
+end of `cli.py`, after the built-in commands:
+
+- `ENTRY_POINT_GROUP = "backuphelper.commands"`; discovery is by installed
+  distribution metadata (`pip install`ed), exactly like Source plugins.
+- A group name collision with a built-in command is up to the plugin to avoid;
+  pick a distinct top-level name (e.g. the app name).
+- A plugin that fails to import, whose factory raises, or that is not a
+  `typer.Typer` is **skipped with a warning** — a broken command plugin never
+  breaks the built-in CLI.
+
+A command plugin typically pairs with a Source plugin in the same package: the
+Source writes the app export into the snapshot, the command group reads it back
+out. Reuse the engine's restore front-half (off-site S3 hydration, the sha256
+gate, decrypt, `extract_bundle`) instead of reimplementing it — see the NocoDB
+plugin's `_snapshot.open_export` for the pattern.
+
 ## Lifecycle hooks
 
 Hooks are **opt-in** extension points the runner invokes around a job. The
