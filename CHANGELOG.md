@@ -1,3 +1,10 @@
+## [1.5.3](https://github.com/bauer-group/CS-BackupHelper/compare/v1.5.2...v1.5.3) (2026-07-08)
+
+### 🐛 Bug Fixes
+
+* **s3:** streamed snapshot download to disk to avoid OOM ([9e27827](https://github.com/bauer-group/CS-BackupHelper/commit/9e27827e56b038a2372ed8c735448ff7a6664aae))
+* **scheduler:** drained the running job on SIGTERM/SIGINT ([3697335](https://github.com/bauer-group/CS-BackupHelper/commit/3697335cf963256aed101210461a15af5468aefd))
+
 ## [1.5.2](https://github.com/bauer-group/CS-BackupHelper/compare/v1.5.1...v1.5.2) (2026-07-08)
 
 ### 🐛 Bug Fixes
