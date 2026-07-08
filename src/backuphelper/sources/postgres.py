@@ -106,9 +106,12 @@ def build_restore_argv(cfg: PostgresConfig, dump: Path) -> list[str]:
     if suffix.endswith(".dump"):
         return ["pg_restore", "--clean", "--if-exists", "--no-owner", "--no-acl",
                 "--single-transaction", "--dbname", cfg.database, str(dump)]
+    # ON_ERROR_STOP=1 makes psql exit non-zero on the first failed statement
+    # instead of swallowing errors and exiting 0 — so a plain-SQL restore onto a
+    # non-empty DB fails loudly instead of reporting a false success.
     if suffix.endswith(".sql.gz"):
-        return ["psql", "--quiet"]  # dump is streamed to stdin (gunzipped)
-    return ["psql", "--quiet", "--file", str(dump)]
+        return ["psql", "--quiet", "--set", "ON_ERROR_STOP=1"]  # dump streamed to stdin (gunzipped)
+    return ["psql", "--quiet", "--set", "ON_ERROR_STOP=1", "--file", str(dump)]
 
 
 def _pg_restore(cfg: PostgresConfig, dump: Path, run: RunFn) -> None:

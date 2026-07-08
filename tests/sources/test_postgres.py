@@ -102,6 +102,17 @@ def test_restore_argv_for_plain_sql():
     assert argv[0] == "psql"
 
 
+def test_plain_restore_stops_on_first_error():
+    # A plain psql restore must fail loudly (ON_ERROR_STOP=1) instead of swallowing
+    # per-statement errors and exiting 0 — otherwise a restore onto a non-empty DB
+    # reports success while restoring nothing.
+    from backuphelper.sources.postgres import build_restore_argv
+    for dump in (Path("/r/database.sql.gz"), Path("/r/database.sql")):
+        argv = build_restore_argv(PostgresSource(_cfg()).cfg, dump)
+        assert argv[0] == "psql"
+        assert "--set" in argv and "ON_ERROR_STOP=1" in argv, argv
+
+
 def test_restore_runs_pg_restore_for_dump(tmp_path):
     # component name defaults to the database name ("logto")
     (tmp_path / "logto.dump").write_bytes(b"x")
