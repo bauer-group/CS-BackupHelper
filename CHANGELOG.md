@@ -1,3 +1,9 @@
+## [1.7.0](https://github.com/bauer-group/CS-BackupHelper/compare/v1.6.0...v1.7.0) (2026-07-08)
+
+### 🚀 Features
+
+* **postgres:** added exclude_table_data (dump structure, drop rows) ([4d1fc21](https://github.com/bauer-group/CS-BackupHelper/commit/4d1fc21b336849307a243d894df7c068a9106e99))
+
 ## [1.6.0](https://github.com/bauer-group/CS-BackupHelper/compare/v1.5.4...v1.6.0) (2026-07-08)
 
 ### 🚀 Features
