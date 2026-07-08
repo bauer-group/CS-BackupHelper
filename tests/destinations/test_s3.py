@@ -82,6 +82,39 @@ def test_small_file_put_exists_get_roundtrip(tmp_path: Path) -> None:
 
 
 @mock_aws
+def test_small_put_verifies_size_via_head(tmp_path: Path) -> None:
+    # A single put_object (< multipart_threshold) must head-verify its size like
+    # the multipart path does, so a truncated upload is caught immediately.
+    _create_bucket("backups")
+    dest = S3Destination(_cfg("backups"))
+    spy = _SpyClient(dest._client)
+    dest._client = spy
+    src = tmp_path / "s.bin"
+    src.write_bytes(b"hello")
+    dest.put(src, "k/s.bin")
+    assert spy.calls["put_object"] >= 1
+    assert spy.calls["head_object"] >= 1, "single put must verify size via head_object"
+
+
+@mock_aws
+def test_single_put_raises_on_size_mismatch(tmp_path: Path) -> None:
+    from unittest.mock import MagicMock
+
+    import pytest
+
+    _create_bucket("backups")
+    dest = S3Destination(_cfg("backups"))
+    fake = MagicMock()
+    fake.put_object.return_value = {}
+    fake.head_object.return_value = {"ContentLength": 999}  # wrong size
+    dest._client = fake
+    src = tmp_path / "s.bin"
+    src.write_bytes(b"hello")  # 5 bytes
+    with pytest.raises(RuntimeError, match="size mismatch"):
+        dest.put(src, "k/s.bin")
+
+
+@mock_aws
 def test_get_streams_to_disk_not_into_memory(tmp_path: Path) -> None:
     # get() must stream the object to disk (download_file) rather than buffering
     # the whole archive in RAM via get_object()["Body"].read() — a multi-GB

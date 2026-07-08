@@ -100,6 +100,19 @@ class S3Destination(Destination):
                 Bucket=self.cfg.bucket, Key=full_key, Body=body
             )
         )
+        self._verify_size(full_key, len(body))
+
+    def _verify_size(self, full_key: str, size: int) -> None:
+        # Head the object and compare ContentLength, so a truncated/failed upload
+        # is caught at backup time rather than at the next restore.
+        head = call_with_retry(
+            lambda: self._client.head_object(Bucket=self.cfg.bucket, Key=full_key)
+        )
+        remote_size = head.get("ContentLength")
+        if remote_size != size:
+            raise RuntimeError(
+                f"upload size mismatch for {full_key}: remote {remote_size} != local {size}"
+            )
 
     def _put_multipart(self, local_path: Path, full_key: str, size: int) -> None:
         upload = call_with_retry(
@@ -144,15 +157,7 @@ class S3Destination(Destination):
                 logger.exception("failed to abort multipart upload for %s", full_key)
             raise
 
-        head = call_with_retry(
-            lambda: self._client.head_object(Bucket=self.cfg.bucket, Key=full_key)
-        )
-        remote_size = head.get("ContentLength")
-        if remote_size != size:
-            raise RuntimeError(
-                f"multipart size mismatch for {full_key}: "
-                f"remote {remote_size} != local {size}"
-            )
+        self._verify_size(full_key, size)
         logger.debug("multipart upload of %s verified (%d parts)", full_key, len(parts))
 
     def get(self, key: str, dest: Path) -> None:
