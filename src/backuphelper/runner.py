@@ -133,6 +133,7 @@ def restore_snapshot(
 ) -> bool:
     """Restore a snapshot: decrypt → extract → per-source restore. Destructive."""
     data_dir = Path(data_dir)
+    _hydrate_from_destinations(job, data_dir, snapshot_id)
     artifact = _find_artifact(data_dir, snapshot_id)
     sidecar = data_dir / f"{snapshot_id}.manifest.json"
     if artifact is None or not sidecar.exists():
@@ -140,6 +141,10 @@ def restore_snapshot(
         return False
 
     manifest = read_manifest(sidecar)
+    if manifest.archive_sha256 and sha256_file(artifact) != manifest.archive_sha256:
+        log.error("snapshot %s failed its sha256 integrity check — refusing to restore",
+                  snapshot_id)
+        return False
     specs = {_spec_component_name(s): s for s in job.sources}
 
     with tempfile.TemporaryDirectory() as td:
@@ -192,6 +197,58 @@ def _decrypt_if_needed(artifact: Path, work: Path) -> Path:
 def _find_artifact(data_dir: Path, snapshot_id: str) -> Optional[Path]:
     matches = sorted(data_dir.glob(f"{snapshot_id}.tar.gz*"))
     return matches[0] if matches else None
+
+
+def _hydrate_from_destinations(job: Job, data_dir: Path, snapshot_id: str) -> None:
+    """Off-site disaster recovery: when a snapshot's artifact + sidecar are gone
+    from the local data dir, pull them back from the first S3 destination that
+    holds them, so a restore works even after the local volume is lost. No-op
+    when the snapshot is already present locally."""
+    if _find_artifact(data_dir, snapshot_id) is not None and (
+        data_dir / f"{snapshot_id}.manifest.json"
+    ).exists():
+        return
+    manifest_key = f"{snapshot_id}.manifest.json"
+    for spec in job.destinations:
+        if spec.type != "s3":
+            continue
+        data = spec.model_dump(exclude={"type"})
+        if not data.get("bucket"):
+            continue
+        data["ensure_bucket"] = False  # read-only path: never create a bucket on restore
+        try:
+            dest = S3Destination(data)
+            keys = dest.list_keys(snapshot_id)
+        except Exception as exc:  # noqa: BLE001 - a bad destination must not abort DR
+            log.warning("s3 destination unavailable while hydrating %s: %s", snapshot_id, exc)
+            continue
+        archives = [k for k in keys if k.startswith(f"{snapshot_id}.tar.gz")]
+        if not archives or manifest_key not in keys:
+            continue
+        for key in archives + [manifest_key]:
+            dest.get(key, data_dir / key)
+        log.info("hydrated snapshot %s from off-site s3 bucket %s", snapshot_id, data["bucket"])
+        return
+
+
+def remote_snapshot_ids(job: Job) -> set[str]:
+    """Snapshot ids that exist in the job's off-site S3 destinations (by manifest
+    key), so `list` can surface snapshots that are no longer on the local volume."""
+    ids: set[str] = set()
+    for spec in job.destinations:
+        if spec.type != "s3":
+            continue
+        data = spec.model_dump(exclude={"type"})
+        if not data.get("bucket"):
+            continue
+        data["ensure_bucket"] = False
+        try:
+            for key in S3Destination(data).list_keys():
+                if key.endswith(".manifest.json"):
+                    ids.add(key[: -len(".manifest.json")])
+        except Exception as exc:  # noqa: BLE001 - a bad destination must not break list
+            log.warning("could not list off-site s3 destination: %s", exc)
+    return ids
 
 
 def _spec_component_name(spec: SourceSpec) -> str:

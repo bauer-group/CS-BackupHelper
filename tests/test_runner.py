@@ -167,6 +167,82 @@ def test_restore_missing_snapshot_returns_false(tmp_path):
     assert restore_snapshot(job, data_dir=tmp_path / "data", snapshot_id="nope") is False
 
 
+def test_restore_hydrates_from_s3_when_local_missing(tmp_path):
+    # Disaster-recovery: the local /data volume is gone, but the snapshot still
+    # sits in the off-site S3 destination. restore must pull it back and rebuild.
+    import boto3
+    from moto import mock_aws
+
+    src = tmp_path / "uploads"
+    src.mkdir()
+    (src / "a.txt").write_text("A")
+    data = tmp_path / "data"
+
+    with mock_aws():
+        boto3.client("s3", region_name="eu-central-1", aws_access_key_id="k",
+                     aws_secret_access_key="s").create_bucket(
+            Bucket="offsite", CreateBucketConfiguration={"LocationConstraint": "eu-central-1"})
+        job = Job.model_validate({
+            "name": "main",
+            "sources": [{"type": "filesystem", "name": "uploads", "path": str(src)}],
+            "destinations": [{"type": "local"},
+                             {"type": "s3", "bucket": "offsite", "access_key": "k",
+                              "secret_key": "s", "region": "eu-central-1", "ensure_bucket": False}],
+        })
+        run_job(job, data_dir=data, instance_name="i", now=NOW, snapshot_id="h1")
+
+        (data / "h1.tar.gz").unlink()          # simulate loss of the local volume
+        (data / "h1.manifest.json").unlink()
+        shutil.rmtree(src)                     # and the source, to prove a real rebuild
+
+        ok = restore_snapshot(job, data_dir=data, snapshot_id="h1")
+
+    assert ok is True
+    assert (src / "a.txt").read_text() == "A"
+
+
+def test_remote_snapshot_ids_lists_offsite(tmp_path):
+    import boto3
+    from moto import mock_aws
+
+    from backuphelper.runner import remote_snapshot_ids
+
+    src = tmp_path / "uploads"
+    src.mkdir()
+    (src / "a.txt").write_text("A")
+    data = tmp_path / "data"
+    with mock_aws():
+        boto3.client("s3", region_name="eu-central-1", aws_access_key_id="k",
+                     aws_secret_access_key="s").create_bucket(
+            Bucket="offsite", CreateBucketConfiguration={"LocationConstraint": "eu-central-1"})
+        job = Job.model_validate({
+            "name": "main",
+            "sources": [{"type": "filesystem", "name": "uploads", "path": str(src)}],
+            "destinations": [{"type": "s3", "bucket": "offsite", "access_key": "k",
+                              "secret_key": "s", "region": "eu-central-1", "ensure_bucket": False}],
+        })
+        run_job(job, data_dir=data, instance_name="i", now=NOW, snapshot_id="r1")
+        ids = remote_snapshot_ids(job)
+    assert ids == {"r1"}
+
+
+def test_restore_refuses_corrupt_archive(tmp_path):
+    # A destructive restore must abort if the archive fails its sha256 gate,
+    # before touching live data.
+    src = tmp_path / "uploads"
+    src.mkdir()
+    (src / "a.txt").write_text("A")
+    data = tmp_path / "data"
+    job = Job.model_validate({
+        "name": "main",
+        "sources": [{"type": "filesystem", "name": "uploads", "path": str(src)}],
+        "destinations": [{"type": "local"}],
+    })
+    run_job(job, data_dir=data, instance_name="i", now=NOW, snapshot_id="c1")
+    (data / "c1.tar.gz").write_bytes(b"corrupted")  # tamper — sha256 no longer matches manifest
+    assert restore_snapshot(job, data_dir=data, snapshot_id="c1") is False
+
+
 def test_retention_prunes_old_local_snapshots(tmp_path):
     data = tmp_path / "data"
     job = _fs_job(tmp_path, retention={"count": 2})

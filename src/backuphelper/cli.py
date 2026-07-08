@@ -21,7 +21,13 @@ from .healthcheck import is_healthy
 from .integrity.hashing import sha256_file
 from .logging_setup import redact, setup_logging
 from .notify.manager import AlertManager
-from .runner import JobResult, restore_snapshot, run_job
+from .runner import (
+    JobResult,
+    _hydrate_from_destinations,
+    remote_snapshot_ids,
+    restore_snapshot,
+    run_job,
+)
 
 app = typer.Typer(add_completion=False, help="BAUER GROUP central backup engine")
 log = logging.getLogger(__name__)
@@ -117,14 +123,21 @@ def create() -> None:
 
 
 @app.command("list")
-def list_cmd() -> None:
-    """List local snapshots."""
-    rows = list_snapshots(data_dir())
-    if not rows:
+def list_cmd(job: Optional[str] = typer.Option(None, "--job")) -> None:
+    """List snapshots — local plus any that live only in the off-site S3 target."""
+    dd = data_dir()
+    sizes = dict(list_snapshots(dd))
+    target = _pick_job(load_config(), job)
+    if target is not None:
+        for sid in remote_snapshot_ids(target):
+            sizes.setdefault(sid, 0)  # 0 bytes = present off-site only, not local
+    if not sizes:
         typer.echo("no snapshots found")
         return
-    for sid, size in rows:
-        typer.echo(f"{sid:24s} {size:>12d} bytes")
+    for sid in sorted(sizes):
+        size = sizes[sid]
+        where = "" if size else "  (off-site only)"
+        typer.echo(f"{sid:24s} {size:>12d} bytes{where}")
 
 
 @app.command()
@@ -138,8 +151,12 @@ def show(snapshot_id: str) -> None:
 
 
 @app.command()
-def verify(snapshot_id: str) -> None:
-    """Verify a snapshot's archive against its manifest sha256."""
+def verify(snapshot_id: str, job: Optional[str] = typer.Option(None, "--job")) -> None:
+    """Verify a snapshot's archive against its manifest sha256 (pulls it from the
+    off-site S3 target first if it is not on the local volume)."""
+    target = _pick_job(load_config(), job)
+    if target is not None:
+        _hydrate_from_destinations(target, data_dir(), snapshot_id)
     if verify_snapshot(data_dir(), snapshot_id):
         typer.echo(f"OK {snapshot_id}")
         raise typer.Exit(0)
