@@ -1,3 +1,9 @@
+## [1.5.4](https://github.com/bauer-group/CS-BackupHelper/compare/v1.5.3...v1.5.4) (2026-07-08)
+
+### 🐛 Bug Fixes
+
+* **filesystem:** accepted a CSV string for subdirs / exclude ([775f4e9](https://github.com/bauer-group/CS-BackupHelper/commit/775f4e95ebf5cfc160c3cf0b2ad1eb8c9a4521e7))
+
 ## [1.5.3](https://github.com/bauer-group/CS-BackupHelper/compare/v1.5.2...v1.5.3) (2026-07-08)
 
 ### 🐛 Bug Fixes
