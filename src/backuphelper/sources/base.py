@@ -38,6 +38,14 @@ class Source(ABC):
     def __init__(self, spec: Mapping[str, Any]):
         self.spec = dict(spec)
 
+    @property
+    def component_name(self) -> str:
+        """The name ``produce`` gives its component — restore matches on this, so
+        the two must agree. Built-in sources override to read their validated
+        config; plugins get a sensible default (their configured ``name``, else
+        the type). Keep this in lockstep with what ``produce`` sets."""
+        return self.spec.get("name") or self.type
+
     @abstractmethod
     def produce(self, staging_dir: Path) -> list[StagedComponent]:
         """Dump into ``staging_dir`` and return the staged components."""

@@ -134,6 +134,44 @@ def test_unconfigured_s3_source_is_skipped(tmp_path):
     assert "s3" not in {c.kind for c in m.components}
 
 
+def test_filesystem_without_name_is_restorable(tmp_path):
+    # The name the runner looks up at RESTORE must equal the name produce() wrote,
+    # or the component is silently skipped. A filesystem source without an explicit
+    # "name" used to produce "files" while restore looked up "filesystem".
+    from backuphelper.plugins.registry import build_source
+    from backuphelper.runner import _spec_component_name
+
+    src = tmp_path / "d"
+    src.mkdir()
+    (src / "a.txt").write_text("A")
+    spec = SourceSpec.model_validate({"type": "filesystem", "path": str(src)})
+    staging = tmp_path / "s"
+    staging.mkdir()
+    produced = build_source(spec.model_dump()).produce(staging)[0].name
+    assert _spec_component_name(spec) == produced
+
+
+def test_spec_component_name_matches_source_for_every_type():
+    # The restore lookup name must equal the source's own component name for every
+    # source type, including the name-less defaults that used to diverge
+    # (filesystem "files" vs "filesystem", postgres "postgres" vs "database").
+    from backuphelper.plugins.registry import build_source
+    from backuphelper.runner import _spec_component_name
+
+    specs = [
+        {"type": "filesystem", "path": "/x"},                 # no name -> "files"
+        {"type": "postgres", "host": "h"},                    # no name/db -> "postgres"
+        {"type": "postgres", "host": "h", "database": "logto"},
+        {"type": "mariadb", "host": "h", "database": "wp"},
+        {"type": "s3", "bucket": "b"},                        # no name -> "s3"
+        {"type": "env"},                                      # no name -> "env"
+        {"type": "filesystem", "name": "uploads", "path": "/x"},
+    ]
+    for spec_dict in specs:
+        spec = SourceSpec.model_validate(spec_dict)
+        assert _spec_component_name(spec) == build_source(spec.model_dump()).component_name, spec_dict
+
+
 def test_disabled_source_is_skipped(tmp_path):
     # A source with "enabled": false is a config-deactivated toggle (e.g. NocoDB's
     # BACKUP_INCLUDE_FILES / BACKUP_DATABASE_DUMP=false) — it must be skipped

@@ -31,6 +31,10 @@ class EnvSnapshotSource(Source):
         self.cfg = EnvSnapshotConfig.model_validate({k: v for k, v in spec.items() if k != "type"})
         self._environ = dict(os.environ if environ is None else environ)
 
+    @property
+    def component_name(self) -> str:
+        return self.cfg.name
+
     def produce(self, staging_dir: Path) -> list[StagedComponent]:
         staging_dir.mkdir(parents=True, exist_ok=True)
         captured = {

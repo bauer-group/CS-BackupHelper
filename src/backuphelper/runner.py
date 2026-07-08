@@ -252,12 +252,19 @@ def remote_snapshot_ids(job: Job) -> set[str]:
 
 
 def _spec_component_name(spec: SourceSpec) -> str:
-    extra = spec.model_extra or {}
-    if extra.get("name"):
-        return extra["name"]
-    if spec.type in ("postgres", "mariadb", "mysql"):
-        return extra.get("database") or extra.get("db") or "database"
-    return spec.type
+    # Ask the source itself for the name it gives its component, so the restore
+    # lookup can never diverge from what produce() actually wrote (a divergence
+    # silently skips the component on restore). Fall back to the old heuristic if
+    # the source cannot be built (unknown type / incomplete spec).
+    try:
+        return build_source(spec.model_dump()).component_name
+    except Exception:  # noqa: BLE001
+        extra = spec.model_extra or {}
+        if extra.get("name"):
+            return extra["name"]
+        if spec.type in ("postgres", "mariadb", "mysql"):
+            return extra.get("database") or extra.get("db") or "database"
+        return spec.type
 
 
 def _produce(job: Job, staging: Path, errors: list[str]) -> list[Component]:

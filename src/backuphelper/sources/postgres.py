@@ -66,6 +66,10 @@ class PostgresSource(Source):
         self.cfg = PostgresConfig.model_validate(_normalize(spec))
         self._run = run
 
+    @property
+    def component_name(self) -> str:
+        return self.cfg.component_name()
+
     def produce(self, staging_dir: Path) -> list[StagedComponent]:
         staging_dir.mkdir(parents=True, exist_ok=True)
         suffix = ".dump" if self.cfg.dump_format == "custom" else ".sql.gz"

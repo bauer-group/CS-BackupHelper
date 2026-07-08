@@ -35,6 +35,10 @@ class FilesystemSource(Source):
             {k: v for k, v in spec.items() if k != "type"}
         )
 
+    @property
+    def component_name(self) -> str:
+        return self.cfg.name
+
     def produce(self, staging_dir: Path) -> list[StagedComponent]:
         staging_dir.mkdir(parents=True, exist_ok=True)
         base = Path(self.cfg.path)

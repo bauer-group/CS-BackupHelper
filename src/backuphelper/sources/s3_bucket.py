@@ -51,6 +51,10 @@ class S3BucketSource(Source):
             config=Config(s3={"addressing_style": style}, signature_version="s3v4"),
         )
 
+    @property
+    def component_name(self) -> str:
+        return self.cfg.name
+
     def produce(self, staging_dir: Path) -> list[StagedComponent]:
         staging_dir.mkdir(parents=True, exist_ok=True)
         out = staging_dir / f"{self.cfg.name}.tar.gz"

@@ -91,6 +91,10 @@ class MariaDBSource(Source):
         env["MYSQL_PWD"] = self.cfg.password
         return env
 
+    @property
+    def component_name(self) -> str:
+        return self.cfg.component_name()
+
     def produce(self, staging_dir: Path) -> list[StagedComponent]:
         staging_dir.mkdir(parents=True, exist_ok=True)
         out = staging_dir / f"{self.cfg.component_name()}.sql.gz"
