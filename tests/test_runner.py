@@ -119,6 +119,21 @@ def test_only_unconfigured_s3_falls_back_to_local(tmp_path):
     assert (data / "s7.tar.gz").exists()  # fell back to local, backup not lost
 
 
+def test_unconfigured_s3_source_is_skipped(tmp_path):
+    # An s3 SOURCE with no bucket means "object storage not configured" — it must
+    # be skipped like an unconfigured s3 destination, not attempted and degraded
+    # to a partial warning. Lets consumers ship the storage-backup source always
+    # and activate it purely by setting the bucket.
+    data = tmp_path / "data"
+    job = _fs_job(tmp_path)
+    job.sources.append(SourceSpec(type="s3", name="storage", bucket=""))
+    result = run_job(job, data_dir=data, instance_name="i", now=NOW, snapshot_id="s10")
+    assert result.status == "success"
+    assert not any("s3" in e for e in result.errors)
+    m = read_manifest(sidecar_path(data, "s10"))
+    assert "s3" not in {c.kind for c in m.components}
+
+
 def test_run_leaves_no_work_artifacts_in_data_dir(tmp_path):
     data = tmp_path / "data"
     run_job(_fs_job(tmp_path), data_dir=data, instance_name="i", now=NOW, snapshot_id="s9")

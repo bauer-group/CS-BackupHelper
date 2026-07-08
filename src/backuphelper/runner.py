@@ -206,8 +206,15 @@ def _spec_component_name(spec: SourceSpec) -> str:
 def _produce(job: Job, staging: Path, errors: list[str]) -> list[Component]:
     components: list[Component] = []
     for spec in job.sources:
+        data = spec.model_dump()
+        if spec.type == "s3" and not data.get("bucket"):
+            # "S3 source if configured, else skip" — an s3 source with no bucket is
+            # simply not activated (mirrors the s3-destination behaviour), so a
+            # DB-only deployment does not degrade to a partial warning every run.
+            log.info("s3 source has no bucket configured — skipping (object storage not backed up)")
+            continue
         try:
-            source = build_source(spec.model_dump())
+            source = build_source(data)
             staged = source.produce(staging)
         except Exception as exc:  # noqa: BLE001 - one bad source degrades to partial
             log.error("source %s failed: %s", spec.type, exc)
