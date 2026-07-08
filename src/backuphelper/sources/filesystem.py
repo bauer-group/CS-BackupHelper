@@ -14,7 +14,7 @@ import tarfile
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .base import Source, StagedComponent
 
@@ -24,6 +24,20 @@ class FilesystemConfig(BaseModel):
     path: str
     subdirs: Optional[list[str]] = None  # if set, only these subdirs of path
     exclude: list[str] = Field(default_factory=list)  # fnmatch globs on rel path
+
+    @field_validator("subdirs", "exclude", mode="before")
+    @classmethod
+    def _csv_or_list(cls, v: object, info) -> object:
+        # Accept a comma-separated string as well as a list, so a compose-
+        # interpolated CSV env (e.g. BACKUP_CONTENT_DIRS=plugins,themes,languages)
+        # is a drop-in. An empty/whitespace CSV means "unset" (None for the
+        # optional subdirs, [] for the always-a-list exclude).
+        if isinstance(v, str):
+            parts = [part.strip() for part in v.split(",") if part.strip()]
+            if parts:
+                return parts
+            return None if info.field_name == "subdirs" else []
+        return v
 
 
 class FilesystemSource(Source):

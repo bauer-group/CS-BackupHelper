@@ -5,7 +5,18 @@ import io
 import tarfile
 from pathlib import Path
 
-from backuphelper.sources.filesystem import FilesystemSource
+from backuphelper.sources.filesystem import FilesystemConfig, FilesystemSource
+
+
+def test_subdirs_accepts_a_csv_string():
+    # BACKUP_CONFIG_JSON often carries the subdir set as a compose-interpolated CSV
+    # (e.g. WordPress' BACKUP_CONTENT_DIRS=plugins,themes,languages). Accept both a
+    # CSV string and a JSON list, so the config stays a drop-in for the old var.
+    assert FilesystemConfig(path="/x", subdirs="plugins, themes ,languages").subdirs == [
+        "plugins", "themes", "languages"]
+    assert FilesystemConfig(path="/x", subdirs=["a", "b"]).subdirs == ["a", "b"]
+    assert FilesystemConfig(path="/x", subdirs="").subdirs is None      # empty CSV -> unset (all of path)
+    assert FilesystemConfig(path="/x").subdirs is None
 
 
 def _tree(base: Path):
