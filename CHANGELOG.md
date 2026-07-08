@@ -1,3 +1,9 @@
+## [1.2.0](https://github.com/bauer-group/CS-BackupHelper/compare/v1.1.0...v1.2.0) (2026-07-08)
+
+### 🚀 Features
+
+* **runner:** skipped an s3 source with no bucket (opt-in object storage) ([13c0767](https://github.com/bauer-group/CS-BackupHelper/commit/13c0767f05c64ddf4d989af0b18e0cfd995320af))
+
 ## [1.1.0](https://github.com/bauer-group/CS-BackupHelper/compare/v1.0.2...v1.1.0) (2026-07-07)
 
 ### 🚀 Features
