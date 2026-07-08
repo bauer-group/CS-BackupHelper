@@ -1,3 +1,9 @@
+## [1.4.0](https://github.com/bauer-group/CS-BackupHelper/compare/v1.3.0...v1.4.0) (2026-07-08)
+
+### 🚀 Features
+
+* **cli:** added a plugin command-injection extension point ([79c1857](https://github.com/bauer-group/CS-BackupHelper/commit/79c18570aca7a0d5d9756f4c8c1b3b74e8fc97f8))
+
 ## [1.3.0](https://github.com/bauer-group/CS-BackupHelper/compare/v1.2.0...v1.3.0) (2026-07-08)
 
 ### 🚀 Features
