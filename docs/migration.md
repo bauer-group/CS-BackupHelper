@@ -49,25 +49,26 @@ The compose service points at that image and supplies the job config inline — 
 
 Effort to migrate, and what each repo's meta-layer sets (the engine supplies everything else):
 
-| Effort | Repo | Meta-layer sets |
+| Effort | Repo | Status — meta-layer sets |
 | --- | --- | --- |
-| trivial | `SaaS-Projects/CovalidaIAM` | OCI labels only, repoint `FROM` |
-| low | `Container-Solution/IAMStack` | source=postgres(logto), HMAC webhook secret, S3 target |
-| low | `Container-Solution/IAM` (Zitadel) | source=postgres(zitadel) |
-| low | `Production+Development/SonarQube` | source=postgres; normalize plaintext webhook → HMAC |
-| low | `Container-Solution/ZAMMAD` | source=[postgres, filesystem:/opt/zammad/storage] |
-| low | `Demo-Projects/ContainerBackupPostgreSQL` | source=postgres, dest=[local,s3] |
-| medium | `Container-Solution/Outline` | source=[postgres, s3:attachments], dest=[local,s3] |
+| trivial | `SaaS-Projects/CovalidaIAM` | ✅ done — consumer, mirrors `cs-iamstack/database-backup` |
+| low | `Container-Solution/IAMStack` | ✅ done — canonical meta-layer + consumer template |
+| low | `Container-Solution/IAM` (Zitadel) | ✅ done — source=postgres(zitadel) |
+| low | `Production+Development/SonarQube` | ✅ done — source=postgres; webhook plaintext → HMAC |
+| low | `Container-Solution/ZAMMAD` | ✅ done — source=[postgres, filesystem:/opt/zammad/storage] |
+| low | `Demo-Projects/ContainerBackupPostgreSQL` | ⏸ deferred — needs engine S3 Object-Lock/WORM (it is the donor) |
+| medium | `Container-Solution/Outline` | ✅ done — source=[postgres, s3:attachments], dest=[local,s3] |
 | medium | `Container-Solution/DocumentSigning` | source=[postgres, s3, env-snapshot] |
-| medium | `Container-Solution/NocoDB` | source=[postgres, filesystem]; NocoDB REST exporter as a plugin |
-| medium | `Container-Solution/WordPressStack` | source=[mariadb, filesystem:uploads, filesystem:content] |
+| medium | `Container-Solution/NocoDB` | source=[postgres, s3-or-filesystem]; attachments live locally or on S3 per config — no app plugin needed |
+| medium | `Container-Solution/WordPressStack` | source=[mariadb, filesystem:uploads/content] (or S3 per config) |
 | high | `Container-Solution/n8n` | +nodejs/npm/n8n; n8n-CLI source plugin |
-| high | `Container-Solution/GitHubBackup` | git/LFS/wiki engine stays a GitHub source plugin |
 | high | `Internal-Projects/BAUERGROUP.HardwareIDAllocator` | .NET→Python re-platform or NDJSON mode |
 
-> `Internal-Projects/CanvaBackupRunner` is intentionally **out of scope** — it is
-> a standalone SaaS-export runner and stays standalone; it is not migrated onto
-> BackupHelper.
+> **Out of scope** — not migrated onto BackupHelper, these stay standalone:
+> `Internal-Projects/CanvaBackupRunner` (standalone SaaS-export runner),
+> `Container-Solution/GitHubBackup` (a GitHub-specific git/LFS/wiki engine, not a
+> generic DB/file backup), and the Home Assistant `S3CompatibleBackup` (an HA
+> plugin, not a container).
 
 Start with the trivial/low tier (pure DB backups) to prove the model, then the medium tier (DB + files/objects), and finally the high tier where an app-specific exporter becomes a plugin.
 
