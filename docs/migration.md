@@ -59,7 +59,7 @@ Effort to migrate, and what each repo's meta-layer sets (the engine supplies eve
 | low | `Demo-Projects/ContainerBackupPostgreSQL` | ⏸ deferred — needs engine S3 Object-Lock/WORM (it is the donor) |
 | medium | `Container-Solution/Outline` | ✅ done — source=[postgres, s3:attachments], dest=[local,s3] |
 | medium | `Container-Solution/DocumentSigning` | source=[postgres, s3, env-snapshot] |
-| medium | `Container-Solution/NocoDB` | source=[postgres, s3-or-filesystem]; attachments live locally or on S3 per config — no app plugin needed |
+| medium | `Container-Solution/NocoDB` | source=[postgres, filesystem/s3] **+ a NocoDB REST-API exporter** (schema / records / attachments as JSON) registered as a Source plugin — app-specific, not reproducible by a generic dump |
 | medium | `Container-Solution/WordPressStack` | source=[mariadb, filesystem:uploads/content] (or S3 per config) |
 | high | `Container-Solution/n8n` | +nodejs/npm/n8n; n8n-CLI source plugin |
 | high | `Internal-Projects/BAUERGROUP.HardwareIDAllocator` | .NET→Python re-platform or NDJSON mode |
