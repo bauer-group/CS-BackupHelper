@@ -1,3 +1,14 @@
+## [1.6.0](https://github.com/bauer-group/CS-BackupHelper/compare/v1.5.4...v1.6.0) (2026-07-08)
+
+### 🚀 Features
+
+* **hooks:** auto-discovered lifecycle hooks via the backuphelper.hooks group ([4dc9986](https://github.com/bauer-group/CS-BackupHelper/commit/4dc9986bd5a750fe1fa0ac68aa887e2f032d21a6))
+
+### 🐛 Bug Fixes
+
+* **cli:** redacted config output by default (--show-secrets to reveal) ([0fd917c](https://github.com/bauer-group/CS-BackupHelper/commit/0fd917c023a6e44d02c46508db7163e5e93671a4))
+* **s3:** verified object size after a single-part put ([ade7186](https://github.com/bauer-group/CS-BackupHelper/commit/ade7186b67b8736ff9f11720695ef5e3499b45fd))
+
 ## [1.5.4](https://github.com/bauer-group/CS-BackupHelper/compare/v1.5.3...v1.5.4) (2026-07-08)
 
 ### 🐛 Bug Fixes
