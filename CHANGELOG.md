@@ -1,3 +1,9 @@
+## [1.5.1](https://github.com/bauer-group/CS-BackupHelper/compare/v1.5.0...v1.5.1) (2026-07-08)
+
+### 🐛 Bug Fixes
+
+* **postgres:** failed loudly on a plain-SQL restore error ([3c09d06](https://github.com/bauer-group/CS-BackupHelper/commit/3c09d06fe06fbf9b136c23e7f870ad5c6a9abbf0))
+
 ## [1.5.0](https://github.com/bauer-group/CS-BackupHelper/compare/v1.4.0...v1.5.0) (2026-07-08)
 
 ### 🚀 Features
