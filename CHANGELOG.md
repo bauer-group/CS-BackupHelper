@@ -1,3 +1,9 @@
+## [1.3.0](https://github.com/bauer-group/CS-BackupHelper/compare/v1.2.0...v1.3.0) (2026-07-08)
+
+### 🚀 Features
+
+* **runner:** restored off-site S3 fetch + sha256 gate on restore ([e7c0691](https://github.com/bauer-group/CS-BackupHelper/commit/e7c0691a2e537416982e2d4d221dfc5fc59f791e))
+
 ## [1.2.0](https://github.com/bauer-group/CS-BackupHelper/compare/v1.1.0...v1.2.0) (2026-07-08)
 
 ### 🚀 Features
