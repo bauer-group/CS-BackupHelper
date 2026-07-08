@@ -82,6 +82,27 @@ def test_small_file_put_exists_get_roundtrip(tmp_path: Path) -> None:
 
 
 @mock_aws
+def test_get_streams_to_disk_not_into_memory(tmp_path: Path) -> None:
+    # get() must stream the object to disk (download_file) rather than buffering
+    # the whole archive in RAM via get_object()["Body"].read() — a multi-GB
+    # snapshot (e.g. DocumentSigning's PDF-bucket mirror) would OOM otherwise.
+    _create_bucket("backups")
+    dest = S3Destination(_cfg("backups"))
+    src = tmp_path / "big.bin"
+    src.write_bytes(b"x" * (2 * 1024 * 1024))
+    dest.put(src, "s/big.bin")
+
+    spy = _SpyClient(dest._client)
+    dest._client = spy
+    out = tmp_path / "out.bin"
+    dest.get("s/big.bin", out)
+
+    assert out.read_bytes() == src.read_bytes()
+    assert spy.calls["get_object"] == 0, "get() must not buffer the whole object via get_object().read()"
+    assert spy.calls["download_file"] >= 1
+
+
+@mock_aws
 def test_list_keys_sorted_and_strips_config_prefix(tmp_path: Path) -> None:
     _create_bucket("backups")
     dest = S3Destination(_cfg("backups", prefix="team/"))

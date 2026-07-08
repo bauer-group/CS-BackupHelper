@@ -158,12 +158,12 @@ class S3Destination(Destination):
     def get(self, key: str, dest: Path) -> None:
         dest = Path(dest)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        resp = call_with_retry(
-            lambda: self._client.get_object(
-                Bucket=self.cfg.bucket, Key=self._full_key(key)
-            )
+        full_key = self._full_key(key)
+        # Stream to disk (chunked TransferManager) instead of buffering the whole
+        # object in memory — a multi-GB snapshot would otherwise OOM the container.
+        call_with_retry(
+            lambda: self._client.download_file(self.cfg.bucket, full_key, str(dest))
         )
-        dest.write_bytes(resp["Body"].read())
 
     def list_keys(self, prefix: str = "") -> list[str]:
         search = self._full_key(prefix)
