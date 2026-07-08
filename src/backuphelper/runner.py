@@ -152,7 +152,8 @@ def restore_snapshot(
         bundle = _decrypt_if_needed(artifact, work)
         extracted = extract_bundle(bundle, work / "extracted")
         if hooks:
-            hooks.run("pre_restore", {"job": job.name, "snapshot_id": snapshot_id})
+            hooks.run("pre_restore", {"job": job.name, "snapshot_id": snapshot_id,
+                                      "extracted": extracted, "manifest": manifest})
         ok = True
         for comp in manifest.components:
             if comp.error or (only and comp.name not in only):
@@ -163,7 +164,8 @@ def restore_snapshot(
                 continue
             ok = _restore_component(spec, comp, extracted, work) and ok
         if hooks:
-            hooks.run("post_restore", {"job": job.name, "snapshot_id": snapshot_id})
+            hooks.run("post_restore", {"job": job.name, "snapshot_id": snapshot_id,
+                                       "extracted": extracted, "manifest": manifest, "ok": ok})
     return ok
 
 

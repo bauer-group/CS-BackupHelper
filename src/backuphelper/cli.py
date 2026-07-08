@@ -22,6 +22,7 @@ from .integrity.hashing import sha256_file
 from .logging_setup import redact, setup_logging
 from .notify.manager import AlertManager
 from .plugins.commands import register_command_plugins
+from .plugins.hooks import discover_hooks
 from .runner import (
     JobResult,
     _hydrate_from_destinations,
@@ -41,7 +42,8 @@ def data_dir() -> Path:
 
 def _run_one(job: Job, instance_name: str, dd: Path) -> JobResult:
     notifier = AlertManager(job.notifications)
-    return run_job(job, data_dir=dd, instance_name=instance_name, notifier=notifier)
+    return run_job(job, data_dir=dd, instance_name=instance_name, notifier=notifier,
+                   hooks=discover_hooks())
 
 
 def run_all_now(cfg: RootConfig, dd: Path) -> int:
@@ -189,7 +191,7 @@ def restore(snapshot_id: str,
         typer.echo("aborted")
         raise typer.Exit(0)
     ok = restore_snapshot(target, data_dir=data_dir(), snapshot_id=snapshot_id,
-                          only=set(only) if only else None)
+                          only=set(only) if only else None, hooks=discover_hooks())
     typer.echo("restore complete" if ok else "restore finished with errors")
     raise typer.Exit(0 if ok else 1)
 
@@ -244,11 +246,16 @@ def prune(keep: Optional[int] = typer.Option(None, "--keep"),
 
 @app.command("config")
 def config_cmd(action: str = typer.Argument("print"),
-               redacted: bool = typer.Option(False, "--redacted")) -> None:
-    """Print the fully-merged effective config (secrets masked with --redacted)."""
+               show_secrets: bool = typer.Option(
+                   False, "--show-secrets", help="print secrets in cleartext (default: redacted)"),
+               redacted: bool = typer.Option(
+                   False, "--redacted", hidden=True,
+                   help="(deprecated) redaction is now the default")) -> None:
+    """Print the fully-merged effective config. Secrets are REDACTED by default;
+    pass --show-secrets to reveal them."""
     cfg = load_config()
     text = cfg.model_dump_json(indent=2)
-    typer.echo(redact(text) if redacted else text)
+    typer.echo(text if show_secrets else redact(text))
 
 
 @app.command()

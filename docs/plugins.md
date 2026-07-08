@@ -252,29 +252,33 @@ registry.register("pre_restore", guard_encryption_key)
 Because `pre_restore` fires before the per-component restore loop, a raise here
 stops the restore before it overwrites any live data.
 
-### Registering and running hooks
+### Registering hooks — the `backuphelper.hooks` entry-point group
 
-`HookRegistry` is the wiring point:
-
-```python
-registry = HookRegistry()
-registry.register("pre_backup", quiesce_app)     # ValueError on an unknown phase
-registry.register("post_backup", resume_app)
-```
-
-The runner accepts a registry programmatically:
+A repo ships a `register(registry)` function and points an entry point at it:
 
 ```python
-from backuphelper.runner import run_job, restore_snapshot
-
-run_job(job, data_dir=dd, instance_name=name, hooks=registry)
-restore_snapshot(job, data_dir=dd, snapshot_id=sid, hooks=registry)
+# my_plugin/hooks.py
+def register(registry) -> None:                  # called once at CLI startup
+    registry.register("pre_restore", guard_encryption_key)
+    registry.register("pre_backup", quiesce_app)
 ```
 
-Unlike Source plugins, hooks are **not** auto-discovered from entry points — they
-are handed to the runner in code. A repo that needs hooks wires a small custom
-entrypoint that builds the registry and drives the runner, keeping all
-app-specific logic in the repo.
+```toml
+[project.entry-points."backuphelper.hooks"]
+myapp = "my_plugin.hooks:register"
+```
+
+`backuphelper.plugins.hooks.discover_hooks()` builds a `HookRegistry` from every
+discovered `register` at startup and the CLI threads it into `run_job` /
+`restore_snapshot` (create, the scheduler daemon, and restore). With **no** hook
+plugins installed the registry is empty, so the zero-coupling online dump is
+unchanged. A plugin whose `register` raises is skipped, not fatal.
+
+The `pre_restore` / `post_restore` context carries the extracted snapshot dir and
+manifest (`{"job", "snapshot_id", "extracted", "manifest"}`), so a gate hook can
+read a captured artifact — e.g. compare the snapshot's `env.json` `ENCRYPTION_KEY`
+to the live one and raise to abort. (You can still build and pass a `HookRegistry`
+programmatically to `run_job`/`restore_snapshot` if you drive the runner directly.)
 
 ## See also
 

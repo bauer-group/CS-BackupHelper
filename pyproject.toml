@@ -44,6 +44,13 @@ env = "backuphelper.sources.env_snapshot:EnvSnapshotSource"
 # [project.entry-points."backuphelper.commands"]
 # <group-name> = "<pkg>.<module>:<typer_app_or_factory>"
 
+# Lifecycle-hook plugins register here: each entry point is a register(registry)
+# callable that adds pre/post_backup|dump|restore hooks (an app quiesce, an
+# ENCRYPTION_KEY pre_restore gate, …). discover_hooks() builds the registry at CLI
+# startup; with no hook plugins installed it is empty (zero-coupling default).
+# [project.entry-points."backuphelper.hooks"]
+# <name> = "<pkg>.<module>:register"
+
 [project.scripts]
 backuphelper = "backuphelper.main:main"
 
