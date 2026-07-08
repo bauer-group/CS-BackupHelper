@@ -21,6 +21,7 @@ from .healthcheck import is_healthy
 from .integrity.hashing import sha256_file
 from .logging_setup import redact, setup_logging
 from .notify.manager import AlertManager
+from .plugins.commands import register_command_plugins
 from .runner import (
     JobResult,
     _hydrate_from_destinations,
@@ -254,3 +255,8 @@ def healthcheck() -> None:
     """Exit 0 if the last backup is fresh, 1 otherwise."""
     max_age = float(os.environ.get("BACKUP_HEALTHCHECK_MAX_AGE_HOURS", "26"))
     raise typer.Exit(0 if is_healthy(data_dir(), max_age) else 1)
+
+
+# Mount any app-specific subcommand groups a consuming repo registered under the
+# ``backuphelper.commands`` entry-point group (e.g. NocoDB restore-* commands).
+register_command_plugins(app)

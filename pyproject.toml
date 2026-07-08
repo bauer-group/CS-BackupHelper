@@ -37,6 +37,13 @@ s3 = "backuphelper.sources.s3_bucket:S3BucketSource"
 filesystem = "backuphelper.sources.filesystem:FilesystemSource"
 env = "backuphelper.sources.env_snapshot:EnvSnapshotSource"
 
+# Command plugins register here: a consuming repo mounts app-specific operator
+# subcommands (e.g. NocoDB restore-schema/records/attachments) as a typer.Typer
+# under this group; the engine discovers + mounts them at CLI startup. The engine
+# ships none of its own.
+# [project.entry-points."backuphelper.commands"]
+# <group-name> = "<pkg>.<module>:<typer_app_or_factory>"
+
 [project.scripts]
 backuphelper = "backuphelper.main:main"
 
