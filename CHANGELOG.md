@@ -1,3 +1,9 @@
+## [1.5.0](https://github.com/bauer-group/CS-BackupHelper/compare/v1.4.0...v1.5.0) (2026-07-08)
+
+### 🚀 Features
+
+* **runner:** added a generic per-source enabled toggle ([4f37809](https://github.com/bauer-group/CS-BackupHelper/commit/4f378095ae0bad0be612fb11302b0a4aca4571d6))
+
 ## [1.4.0](https://github.com/bauer-group/CS-BackupHelper/compare/v1.3.0...v1.4.0) (2026-07-08)
 
 ### 🚀 Features
