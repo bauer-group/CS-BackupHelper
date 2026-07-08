@@ -61,7 +61,7 @@ Effort to migrate, and what each repo's meta-layer sets (the engine supplies eve
 | medium | `Container-Solution/DocumentSigning` | ✅ done — source=[postgres(custom), s3:documents, env(47-var whitelist)], off-site S3 only; a `documenso` command plugin adds the ENCRYPTION_KEY restore gate + `restore-env` lost-key recovery; two-service split (one-shot + scheduler) kept |
 | medium | `Container-Solution/NocoDB` | ✅ done — source=[postgres(plain), filesystem:/nocodb-data, **nocodb-rest**]; the REST exporter + restore-schema/records/attachments ship as the `backuphelper-nocodb` plugin (Source + `nocodb` command group) — needs engine ≥ v1.5.0 (CLI-command injection + per-source `enabled`) |
 | medium | `Container-Solution/WordPressStack` | ✅ done — pure config: source=[mariadb:database, filesystem:uploads, filesystem:content(subdirs plugins/themes/languages)]; Teams MessageCard kept; no plugin |
-| high | `Container-Solution/n8n` | +nodejs/npm/n8n; n8n-CLI source plugin |
+| high | `Container-Solution/n8n` | ✅ done — meta image + nodejs/npm/n8n (pinned to the server version); a `backuphelper-n8n` plugin: `n8n` Source (CLI export, decrypted) + `n8n` command group (import-workflows w/ re-activation, import-credentials, export-now, restore-env) + a pre_restore ENCRYPTION_KEY gate. postgres[custom] drops execution row-data (exclude_table_data). Two alt restore paths: DB dump OR JSON merge |
 | high | `Internal-Projects/BAUERGROUP.HardwareIDAllocator` | .NET→Python re-platform or NDJSON mode |
 
 > **Out of scope** — not migrated onto BackupHelper, these stay standalone:
