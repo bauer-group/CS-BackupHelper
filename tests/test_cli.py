@@ -45,6 +45,27 @@ def test_config_print_redacted_masks_secrets(tmp_path):
     assert "hunter2" not in out.stdout
 
 
+def test_config_print_redacts_by_default(tmp_path):
+    # Safe-by-default: bare `config` must NOT leak secrets in cleartext.
+    env = _env(tmp_path)
+    env["BACKUP_CONFIG_JSON"] = json.dumps({
+        "jobs": [{"name": "j", "sources": [{"type": "postgres", "password": "hunter2"}]}]
+    })
+    out = runner.invoke(app, ["config"], env=env)
+    assert out.exit_code == 0
+    assert "hunter2" not in out.stdout
+
+
+def test_config_show_secrets_reveals(tmp_path):
+    env = _env(tmp_path)
+    env["BACKUP_CONFIG_JSON"] = json.dumps({
+        "jobs": [{"name": "j", "sources": [{"type": "postgres", "password": "hunter2"}]}]
+    })
+    out = runner.invoke(app, ["config", "--show-secrets"], env=env)
+    assert out.exit_code == 0
+    assert "hunter2" in out.stdout
+
+
 def test_healthcheck_grace_when_no_backup(tmp_path):
     env = {"BACKUP_DATA_DIR": str(tmp_path / "empty")}
     assert runner.invoke(app, ["healthcheck"], env=env).exit_code == 0
