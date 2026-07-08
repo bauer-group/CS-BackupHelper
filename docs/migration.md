@@ -58,9 +58,9 @@ Effort to migrate, and what each repo's meta-layer sets (the engine supplies eve
 | low | `Container-Solution/ZAMMAD` | ✅ done — source=[postgres, filesystem:/opt/zammad/storage] |
 | low | `Demo-Projects/ContainerBackupPostgreSQL` | ⏸ deferred — needs engine S3 Object-Lock/WORM (it is the donor) |
 | medium | `Container-Solution/Outline` | ✅ done — source=[postgres, s3:attachments], dest=[local,s3] |
-| medium | `Container-Solution/DocumentSigning` | source=[postgres, s3, env-snapshot] |
+| medium | `Container-Solution/DocumentSigning` | ✅ done — source=[postgres(custom), s3:documents, env(47-var whitelist)], off-site S3 only; a `documenso` command plugin adds the ENCRYPTION_KEY restore gate + `restore-env` lost-key recovery; two-service split (one-shot + scheduler) kept |
 | medium | `Container-Solution/NocoDB` | ✅ done — source=[postgres(plain), filesystem:/nocodb-data, **nocodb-rest**]; the REST exporter + restore-schema/records/attachments ship as the `backuphelper-nocodb` plugin (Source + `nocodb` command group) — needs engine ≥ v1.5.0 (CLI-command injection + per-source `enabled`) |
-| medium | `Container-Solution/WordPressStack` | source=[mariadb, filesystem:uploads/content] (or S3 per config) |
+| medium | `Container-Solution/WordPressStack` | ✅ done — pure config: source=[mariadb:database, filesystem:uploads, filesystem:content(subdirs plugins/themes/languages)]; Teams MessageCard kept; no plugin |
 | high | `Container-Solution/n8n` | +nodejs/npm/n8n; n8n-CLI source plugin |
 | high | `Internal-Projects/BAUERGROUP.HardwareIDAllocator` | .NET→Python re-platform or NDJSON mode |
 
