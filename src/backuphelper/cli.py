@@ -82,7 +82,7 @@ def verify_snapshot(dd: Path, snapshot_id: str) -> bool:
 def run_daemon(cfg: RootConfig, dd: Path) -> None:
     from apscheduler.schedulers.blocking import BlockingScheduler
 
-    from .scheduler import build_trigger
+    from .scheduler import build_trigger, install_signal_drain
 
     tz = os.environ.get("TZ", "Etc/UTC")
     sched = BlockingScheduler(timezone=tz)
@@ -97,11 +97,12 @@ def run_daemon(cfg: RootConfig, dd: Path) -> None:
                       coalesce=True, misfire_grace_time=3600, max_instances=1)
         if job.schedule.on_startup:
             sched.add_job(_job, trigger="date", run_date=datetime.now(), id=f"startup:{job.name}")
+    install_signal_drain(sched)  # SIGTERM/SIGINT drain the running job (docker stop)
     log.info("scheduler started for %d job(s)", len(cfg.jobs))
     try:
         sched.start()
     except (KeyboardInterrupt, SystemExit):
-        sched.shutdown(wait=False)
+        sched.shutdown(wait=True)
 
 
 # ── commands ─────────────────────────────────────────────────────────────────

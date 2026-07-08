@@ -8,6 +8,7 @@ missed/overlapping run never piles up, and drains cleanly on SIGTERM/SIGINT.
 from __future__ import annotations
 
 import logging
+import signal
 from datetime import datetime
 from typing import Callable
 
@@ -18,6 +19,22 @@ from apscheduler.triggers.interval import IntervalTrigger
 from .config.models import ScheduleConfig
 
 log = logging.getLogger(__name__)
+
+
+def install_signal_drain(sched, *, register: Callable = signal.signal) -> Callable:
+    """Install SIGTERM/SIGINT handlers that stop the scheduler and WAIT for the
+    running job to finish before exiting (``shutdown(wait=True)``).
+
+    Without this, ``docker compose stop`` (SIGTERM) hard-kills the daemon at the
+    stop grace period with a backup mid-run — a partial upload with no clean
+    abort. Returns the installed handler (for testing)."""
+    def _drain(signum=None, frame=None) -> None:
+        log.info("received signal %s — draining the running job before shutdown", signum)
+        sched.shutdown(wait=True)
+
+    register(signal.SIGTERM, _drain)
+    register(signal.SIGINT, _drain)
+    return _drain
 
 
 def build_trigger(cfg: ScheduleConfig, timezone: str):
@@ -50,8 +67,9 @@ def build_scheduler(cfg: ScheduleConfig, timezone: str, run_job: Callable[[], ob
 
 
 def run(sched: BlockingScheduler) -> None:
+    install_signal_drain(sched)
     log.info("scheduler started")
     try:
         sched.start()
     except (KeyboardInterrupt, SystemExit):
-        sched.shutdown(wait=False)
+        sched.shutdown(wait=True)  # drain the running job rather than abandon it
