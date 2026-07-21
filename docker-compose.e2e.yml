@@ -53,7 +53,7 @@ services:
     networks: [e2e]
 
   mysql:
-    image: mysql:8.0
+    image: mysql:9.7
     container_name: bh-e2e_MYSQL
     hostname: mysql
     <<: *logging
