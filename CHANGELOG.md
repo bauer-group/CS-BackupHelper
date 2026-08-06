@@ -1,3 +1,9 @@
+## [1.7.1](https://github.com/bauer-group/CS-BackupHelper/compare/v1.7.0...v1.7.1) (2026-08-06)
+
+### 🐛 Bug Fixes
+
+* **ci:** added the missing permissions block ([f7bfce2](https://github.com/bauer-group/CS-BackupHelper/commit/f7bfce2ba1141e8f4a567fc52bfdc57c59183d91))
+
 ## [1.7.0](https://github.com/bauer-group/CS-BackupHelper/compare/v1.6.0...v1.7.0) (2026-07-08)
 
 ### 🚀 Features
