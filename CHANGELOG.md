@@ -4,6 +4,12 @@ All notable changes to this project are documented here. This file is maintained
 automatically by [semantic-release](https://github.com/semantic-release/semantic-release)
 on every release to `main`.
 
+## [1.7.3](https://github.com/bauer-group/CS-BackupHelper/compare/v1.7.2...v1.7.3) (2026-09-18)
+
+### 🔧 Maintenance
+
+* **deps:** update base image python-alpine ([5966745](https://github.com/bauer-group/CS-BackupHelper/commit/5966745c72a7b8722cba27f1bf5c2089269f043b))
+
 ## [1.7.2](https://github.com/bauer-group/CS-BackupHelper/compare/v1.7.1...v1.7.2) (2026-09-01)
 
 ## [1.7.1](https://github.com/bauer-group/CS-BackupHelper/compare/v1.7.0...v1.7.1) (2026-08-06)
