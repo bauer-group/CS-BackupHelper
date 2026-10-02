@@ -4,6 +4,13 @@ All notable changes to this project are documented here. This file is maintained
 automatically by [semantic-release](https://github.com/semantic-release/semantic-release)
 on every release to `main`.
 
+## [1.7.4](https://github.com/bauer-group/CS-BackupHelper/compare/v1.7.3...v1.7.4) (2026-10-02)
+
+### 🔧 Maintenance
+
+* **ci:** removed issue AI summary workflow ([a6839c2](https://github.com/bauer-group/CS-BackupHelper/commit/a6839c2aac248e7b53999cd50508c92944dbcc5b)), references [bauer-group/automation-templates#105](https://github.com/bauer-group/automation-templates/issues/105)
+* **deps:** update base image python-alpine ([3523711](https://github.com/bauer-group/CS-BackupHelper/commit/352371125cf7675f6e666ee65008d1afcced4832))
+
 ## [1.7.3](https://github.com/bauer-group/CS-BackupHelper/compare/v1.7.2...v1.7.3) (2026-09-18)
 
 ### 🔧 Maintenance
