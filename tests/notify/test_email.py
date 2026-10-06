@@ -140,3 +140,31 @@ def test_email_without_host_raises():
 def test_email_without_recipients_raises():
     with pytest.raises(ValueError):
         EmailChannel(_cfg(recipients=[]), smtp_factory=_factory([])).send(_event())
+
+
+# ------------------------------------------------- recipient normalization ---
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ([""], []),                                   # unset ALERT_EMAIL in a stack
+        (["   "], []),
+        (["a@x.com, b@y.com"], ["a@x.com", "b@y.com"]),  # one CSV element
+        (["a@x.com; b@y.com", " c@z.com "], ["a@x.com", "b@y.com", "c@z.com"]),
+        (["a@x.com", "", "b@y.com,"], ["a@x.com", "b@y.com"]),
+        ("a@x.com,b@y.com", ["a@x.com", "b@y.com"]),  # a plain string
+        ("", []),
+    ],
+)
+def test_recipients_are_split_stripped_and_empty_entries_dropped(raw, expected):
+    assert EmailChannelConfig(recipients=raw).recipients == expected
+
+
+def test_email_with_only_empty_recipients_is_not_configured_and_never_connects():
+    from backuphelper.notify.base import ChannelNotConfigured
+
+    created: list = []
+    with pytest.raises(ChannelNotConfigured):
+        EmailChannel(_cfg(recipients=[""]), smtp_factory=_factory(created)).send(_event())
+    assert created == []  # no SMTP session, so no RCPT with an empty address

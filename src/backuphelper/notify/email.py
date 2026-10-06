@@ -13,7 +13,12 @@ from email.message import EmailMessage
 from typing import Callable, ClassVar
 
 from backuphelper.config.models import EmailChannelConfig
-from backuphelper.notify.base import AlertEvent, Channel, format_summary
+from backuphelper.notify.base import (
+    AlertEvent,
+    Channel,
+    ChannelNotConfigured,
+    format_summary,
+)
 
 SmtpFactory = Callable[..., smtplib.SMTP]
 
@@ -29,9 +34,11 @@ class EmailChannel(Channel):
 
     def send(self, event: AlertEvent) -> None:
         if not self.cfg.host:
-            raise ValueError("email channel requires a host")
+            raise ChannelNotConfigured("email channel requires a host")
         if not self.cfg.recipients:
-            raise ValueError("email channel requires at least one recipient")
+            # Empty entries are already dropped by the config model, so [""] from an
+            # unset ALERT_EMAIL-style variable lands here instead of in an SMTP RCPT.
+            raise ChannelNotConfigured("email channel has no recipient address")
 
         msg = self._build_message(event)
 

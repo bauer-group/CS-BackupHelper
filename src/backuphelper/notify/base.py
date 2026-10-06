@@ -58,6 +58,12 @@ def format_summary(event: AlertEvent) -> str:
     return line
 
 
+class ChannelNotConfigured(ValueError):
+    """A channel named in ``channels`` lacks its required config (url, host,
+    recipients). The manager skips it with a one-line warning instead of an error
+    traceback — it is a deployment setting to fix, not a delivery failure."""
+
+
 class Channel(ABC):
     """Base class for every alert channel. ``name`` is the config discriminator."""
 

@@ -53,7 +53,9 @@ An unrecognized `level` value falls back to `warnings`. If `channels` is empty, 
 
 ## Per-channel fault isolation
 
-Each channel is delivered independently inside its own `try`/`except`. If a channel is misconfigured or its send raises (bad URL, SMTP auth failure, HTTP error), the failure is logged with a stack trace and delivery continues to the remaining channels. One broken channel never suppresses a working one, and a channel failure does not fail the backup job.
+Each channel is delivered independently inside its own `try`/`except`. If its send raises (bad URL, SMTP auth failure, HTTP error), the failure is logged with a stack trace and delivery continues to the remaining channels. One broken channel never suppresses a working one, and a channel failure does not fail the backup job.
+
+A channel that is listed in `channels` but lacks its required setting (an empty `url`, an email channel without `host` or without any recipient address) is **not configured** rather than failing: it is skipped with one warning line, e.g. `notification channel 'email' skipped — not configured: email channel has no recipient address`, and nothing is sent.
 
 ## Channels
 
@@ -63,13 +65,13 @@ Sends a multipart text + HTML message over SMTP. STARTTLS and login are applied 
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `host` | string | `null` | SMTP server. Required — send raises without it. |
+| `host` | string | `null` | SMTP server. Required — without it the channel is skipped with a warning. |
 | `port` | int | `587` | SMTP port. |
 | `tls` | bool | `true` | Issue `STARTTLS` before sending. |
 | `username` | string | `null` | Login is performed only when both `username` and `password` are set. |
 | `password` | string | `null` | |
 | `sender` | string | `null` | `From` header. |
-| `recipients` | list of string | `[]` | `To` header. Required — send raises when empty. |
+| `recipients` | list of string | `[]` | `To` header. Each entry may hold several addresses separated by `,` or `;` (a plain string works too); whitespace is stripped and empty entries are dropped, so `[""]` from an unset variable means *no recipients*. Required — with no address left the channel is skipped with a warning instead of sending. |
 
 The subject is `[<instance>] backup <status>: <snapshot_id>`. The body includes job, duration, size and any errors.
 
@@ -89,7 +91,7 @@ A deterministic JSON POST, optionally HMAC-SHA256 signed. See [Webhook signing](
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `url` | string | `null` | Target URL. Required — send raises without it. |
+| `url` | string | `null` | Target URL. Required — without it the channel is skipped with a warning. |
 | `secret` | string | `null` | HMAC-SHA256 signing key. When set, an `X-Signature-256` header is added. |
 
 The POST body is `application/json` with these keys (serialized with sorted keys):
@@ -112,7 +114,7 @@ Posts to a Teams incoming webhook as an Adaptive Card (v1.4, the current Teams-n
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `url` | string | `null` | Teams incoming webhook. Required — send raises without it. |
+| `url` | string | `null` | Teams incoming webhook. Required — without it the channel is skipped with a warning. |
 | `format` | `adaptive` \| `messagecard` | `adaptive` | Card format. |
 
 The card is colored by status: green (`success`), amber (`warning`), red (`error`) — Adaptive Cards use the semantic words `Good` / `Warning` / `Attention`; MessageCards use a `themeColor` hex. Instance, job and snapshot are rendered as a fact list.
@@ -128,7 +130,7 @@ Posts to a Slack incoming webhook as `{"text": "<summary>"}`.
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `url` | string | `null` | Slack incoming webhook. Required — send raises without it. |
+| `url` | string | `null` | Slack incoming webhook. Required — without it the channel is skipped with a warning. |
 
 The summary line is `[<instance>] <title>: <message> (snapshot <id>)`.
 
@@ -142,7 +144,7 @@ Posts to a Discord webhook as `{"content": "<summary>"}` (same summary line as S
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `url` | string | `null` | Discord webhook. Required — send raises without it. |
+| `url` | string | `null` | Discord webhook. Required — without it the channel is skipped with a warning. |
 
 ```json
 { "channels": ["discord"], "discord": { "url": "https://discord.com/api/webhooks/..." } }
@@ -154,7 +156,7 @@ POSTs the event message as a plain-text body to `url` (with `topic` appended whe
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `url` | string | `null` | Base ntfy URL. Required — send raises without it. |
+| `url` | string | `null` | Base ntfy URL. Required — without it the channel is skipped with a warning. |
 | `topic` | string | `null` | Appended to the URL as `<url>/<topic>`. |
 | `token` | string | `null` | Sent as `Authorization: Bearer <token>` for private ntfy instances. |
 
@@ -169,7 +171,7 @@ Pings a Healthchecks.io-style monitoring check. A `success` or `warning` outcome
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `url` | string | `null` | Base check URL. Required — send raises without it. |
+| `url` | string | `null` | Base check URL. Required — without it the channel is skipped with a warning. |
 
 ```json
 { "channels": ["healthchecks"], "level": "all",
