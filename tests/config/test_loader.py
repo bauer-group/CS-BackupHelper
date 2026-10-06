@@ -78,3 +78,15 @@ def test_discrete_env_override_beats_inline_json():
 def test_invalid_json_raises_config_error():
     with pytest.raises(ConfigError):
         load_config(env={"BACKUP_CONFIG_JSON": "{not json"})
+
+
+def test_invalid_config_error_does_not_echo_the_value():
+    # A discrete override is JSON-parsed, so a numeric SMTP password arrives as
+    # an int and fails validation; the error (printed at startup) must name the
+    # field, never the value.
+    env = {"BACKUP_CONFIG_JSON": json.dumps({"jobs": [{"name": "main"}]}),
+           "BACKUP_JOBS__0__NOTIFICATIONS__EMAIL__PASSWORD": "20261006"}
+    with pytest.raises(ConfigError) as info:
+        load_config(env=env)
+    assert "password" in str(info.value)
+    assert "20261006" not in str(info.value)

@@ -20,15 +20,15 @@ from typing import Any, Mapping
 import boto3
 from botocore.client import Config
 from botocore.exceptions import ClientError
-from pydantic import BaseModel
 
+from ..config.models import ConfigModel
 from ..net.retry import call_with_retry
 from .base import Destination
 
 logger = logging.getLogger(__name__)
 
 
-class S3DestinationConfig(BaseModel):
+class S3DestinationConfig(ConfigModel):
     """Validated configuration for an :class:`S3Destination`."""
 
     bucket: str

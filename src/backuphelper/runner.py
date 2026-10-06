@@ -21,6 +21,8 @@ from typing import Optional, Protocol
 
 import tempfile
 
+from pydantic import ValidationError
+
 from .archive.bundle import create_bundle, extract_bundle
 from .archive.manifest import Component, Manifest, read_manifest, sidecar_path, write_manifest
 from .config.models import DestinationSpec, Job, RetentionConfig, SourceSpec
@@ -29,6 +31,7 @@ from .destinations.local import LocalDestination
 from .destinations.s3 import S3Destination
 from .encryption.engine import decrypt, encrypt
 from .integrity.hashing import sha256_file
+from .logging_setup import redact
 from .notify.base import AlertEvent
 from .plugins.hooks import HookRegistry
 from .plugins.registry import build_source
@@ -224,7 +227,7 @@ def _restore_component(spec: SourceSpec, comp: Component, extracted: Path, work:
             source.restore(extracted)
         return True
     except Exception as exc:  # noqa: BLE001
-        log.error("restore of component %s failed: %s", comp.name, exc)
+        log.error("restore of component %s failed: %s", comp.name, _describe(exc))
         return False
 
 
@@ -264,7 +267,8 @@ def _hydrate_from_destinations(job: Job, data_dir: Path, snapshot_id: str) -> No
             dest = S3Destination(data)
             keys = dest.list_keys(snapshot_id)
         except Exception as exc:  # noqa: BLE001 - a bad destination must not abort DR
-            log.warning("s3 destination unavailable while hydrating %s: %s", snapshot_id, exc)
+            log.warning("s3 destination unavailable while hydrating %s: %s", snapshot_id,
+                        _describe(exc))
             continue
         archives = [k for k in keys if k.startswith(f"{snapshot_id}.tar.gz")]
         if not archives or manifest_key not in keys:
@@ -291,7 +295,7 @@ def remote_snapshot_ids(job: Job) -> set[str]:
                 if key.endswith(".manifest.json"):
                     ids.add(key[: -len(".manifest.json")])
         except Exception as exc:  # noqa: BLE001 - a bad destination must not break list
-            log.warning("could not list off-site s3 destination: %s", exc)
+            log.warning("could not list off-site s3 destination: %s", _describe(exc))
     return ids
 
 
@@ -336,7 +340,7 @@ def _produce(job: Job, staging: Path, errors: list[str]) -> list[Component]:
             # manifest — and `show` — never silently omits a configured source,
             # and drop any half-written output so it is not shipped in the archive.
             name = _spec_component_name(spec)
-            message = f"{type(exc).__name__}: {exc}"
+            message = f"{type(exc).__name__}: {_describe(exc)}"
             log.error("source %s (%s) failed: %s", name, spec.type, message)
             errors.append(f"{name}: {message}")
             components.append(Component(name=name, kind=spec.type, size=0, sha256="",
@@ -345,9 +349,10 @@ def _produce(job: Job, staging: Path, errors: list[str]) -> list[Component]:
             continue
         for sc in staged:
             if sc.error or not sc.path:
-                errors.append(f"{sc.name}: {sc.error or 'no output'}")
+                error = redact(sc.error) if sc.error else None
+                errors.append(f"{sc.name}: {error or 'no output'}")
                 components.append(Component(name=sc.name, kind=sc.kind, size=0, sha256="",
-                                            error=sc.error, metadata=sc.metadata))
+                                            error=error, metadata=sc.metadata))
             else:
                 components.append(Component(name=sc.name, kind=sc.kind, size=sc.path.stat().st_size,
                                             sha256=sha256_file(sc.path), metadata=sc.metadata))
@@ -370,7 +375,7 @@ def _maybe_encrypt(archive: Path, job: Job, work: Path, sid: str, errors: list[s
     try:
         return encrypt(archive, out, mode=mode, recipient=job.encryption.recipient)
     except Exception as exc:  # noqa: BLE001
-        errors.append(f"encryption failed: {exc}")
+        errors.append(f"encryption failed: {_describe(exc)}")
         return archive
 
 
@@ -390,8 +395,9 @@ def _build_destinations(specs: list[DestinationSpec], data_dir: Path,
             try:  # builds the client and (ensure_bucket) heads/creates the bucket
                 destinations.append(S3Destination(data))
             except Exception as exc:  # noqa: BLE001 - a bad target must not lose the snapshot
-                log.error("s3 destination %r unavailable: %s", data["bucket"], exc)
-                errors.append(f"s3 destination {data['bucket']!r} unavailable: {exc}")
+                reason = _describe(exc)
+                log.error("s3 destination %r unavailable: %s", data["bucket"], reason)
+                errors.append(f"s3 destination {data['bucket']!r} unavailable: {reason}")
     return destinations
 
 
@@ -521,8 +527,9 @@ def _upload(destinations: list[Destination], artifact: Path, sidecar: Path, sid:
             dest.put(artifact, artifact.name)
             dest.put(sidecar, f"{sid}.manifest.json")
         except Exception as exc:  # noqa: BLE001
-            log.error("upload to %s failed: %s", type(dest).__name__, exc)
-            errors.append(f"upload failed: {exc}")
+            reason = _describe(exc)
+            log.error("upload to %s failed: %s", type(dest).__name__, reason)
+            errors.append(f"upload failed: {reason}")
             continue
         stored.append(dest)
     return stored
@@ -540,8 +547,22 @@ def _apply_retention(dest: Destination, cfg: RetentionConfig, now: datetime,
             for key in list(dest.list_keys(prefix=f"{pruned}.")):
                 dest.delete(key)
     except Exception as exc:  # noqa: BLE001
-        log.error("retention on %s failed: %s", type(dest).__name__, exc)
-        errors.append(f"retention failed: {exc}")
+        reason = _describe(exc)
+        log.error("retention on %s failed: %s", type(dest).__name__, reason)
+        errors.append(f"retention failed: {reason}")
+
+
+def _describe(exc: BaseException) -> str:
+    """An exception as text for the job errors, the alert, the manifest and the
+    log. A pydantic ValidationError is rendered without its input values (a
+    plugin's own config model may not hide them, and the value can be a secret),
+    and the result is redacted like a log line (key=value pairs, user:pass@)."""
+    if isinstance(exc, ValidationError):
+        details = "; ".join(
+            f"{'.'.join(str(part) for part in err['loc']) or 'value'} - {err['msg']}"
+            for err in exc.errors(include_url=False, include_input=False))
+        return redact(f"invalid {exc.title} config: {details}")
+    return redact(str(exc))
 
 
 def parse_snapshot_timestamp(sid: str, fallback: datetime) -> datetime:

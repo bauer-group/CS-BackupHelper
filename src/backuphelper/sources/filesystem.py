@@ -15,12 +15,13 @@ import tarfile
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import Field, field_validator
 
+from ..config.models import ConfigModel
 from .base import Source, StagedComponent
 
 
-class FilesystemConfig(BaseModel):
+class FilesystemConfig(ConfigModel):
     name: str = "files"
     path: str
     subdirs: Optional[list[str]] = None  # if set, only these subdirs of path
