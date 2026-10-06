@@ -14,7 +14,13 @@ import json
 from typing import ClassVar, Optional
 
 from backuphelper.config.models import WebhookChannelConfig
-from backuphelper.notify.base import AlertEvent, Channel, Transport, http_post
+from backuphelper.notify.base import (
+    AlertEvent,
+    Channel,
+    ChannelNotConfigured,
+    Transport,
+    http_post,
+)
 
 
 class WebhookChannel(Channel):
@@ -28,7 +34,7 @@ class WebhookChannel(Channel):
 
     def send(self, event: AlertEvent) -> None:
         if not self.cfg.url:
-            raise ValueError("webhook channel requires a url")
+            raise ChannelNotConfigured("webhook channel requires a url")
 
         payload = {
             "instance": event.instance,

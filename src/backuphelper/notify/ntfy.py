@@ -9,7 +9,13 @@ from __future__ import annotations
 from typing import ClassVar, Optional
 
 from backuphelper.config.models import NtfyChannelConfig
-from backuphelper.notify.base import AlertEvent, Channel, Transport, http_post
+from backuphelper.notify.base import (
+    AlertEvent,
+    Channel,
+    ChannelNotConfigured,
+    Transport,
+    http_post,
+)
 
 
 class NtfyChannel(Channel):
@@ -25,7 +31,7 @@ class NtfyChannel(Channel):
 
     def send(self, event: AlertEvent) -> None:
         if not self.cfg.url:
-            raise ValueError("ntfy channel requires a url")
+            raise ChannelNotConfigured("ntfy channel requires a url")
 
         url = self.cfg.url
         if self.cfg.topic:

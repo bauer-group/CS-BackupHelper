@@ -10,7 +10,13 @@ from __future__ import annotations
 from typing import ClassVar, Optional
 
 from backuphelper.config.models import SimpleUrlChannelConfig
-from backuphelper.notify.base import AlertEvent, Channel, Transport, http_post
+from backuphelper.notify.base import (
+    AlertEvent,
+    Channel,
+    ChannelNotConfigured,
+    Transport,
+    http_post,
+)
 
 
 class HealthchecksChannel(Channel):
@@ -26,7 +32,7 @@ class HealthchecksChannel(Channel):
 
     def send(self, event: AlertEvent) -> None:
         if not self.cfg.url:
-            raise ValueError("healthchecks channel requires a url")
+            raise ChannelNotConfigured("healthchecks channel requires a url")
 
         url = self.cfg.url.rstrip("/")
         if event.status == "error":

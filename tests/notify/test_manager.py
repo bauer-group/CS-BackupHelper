@@ -183,3 +183,29 @@ def test_construction_failure_is_isolated(monkeypatch):
     cfg = NotifyConfig(channels=["webhook", "slack"], level="all")
     AlertManager(cfg).notify(_event("error"))
     assert [name for name, _ in bucket] == ["slack"]
+
+
+def test_misconfigured_channel_is_skipped_with_one_warning(caplog):
+    # Regression: a compose stack renders recipients as ["${ALERT_EMAIL}"]; an
+    # empty variable gave [""], which passed the non-empty check and led to an
+    # SMTP RCPT with an empty address. It must be a clear warning, no send.
+    cfg = NotifyConfig(channels=["email"], level="all",
+                       email={"host": "smtp.invalid", "recipients": [""]})
+    with caplog.at_level(logging.WARNING, logger="backuphelper.notify.manager"):
+        AlertManager(cfg).notify(_event("error"))
+    records = [r for r in caplog.records if r.name == "backuphelper.notify.manager"]
+    assert [r.levelno for r in records] == [logging.WARNING]
+    assert "email" in records[0].getMessage() and "recipient" in records[0].getMessage()
+    assert records[0].exc_info is None  # a config hint, not a stack trace
+
+
+@pytest.mark.parametrize("name", ["webhook", "teams", "slack", "discord", "ntfy", "healthchecks"])
+def test_url_channel_without_url_is_skipped_with_one_warning(name, caplog):
+    # Every URL channel signals a missing url as "not configured", so the manager
+    # logs one hint instead of an ERROR with a stack trace.
+    cfg = NotifyConfig(channels=[name], level="all")
+    with caplog.at_level(logging.WARNING, logger="backuphelper.notify.manager"):
+        AlertManager(cfg).notify(_event("error"))
+    records = [r for r in caplog.records if r.name == "backuphelper.notify.manager"]
+    assert [r.levelno for r in records] == [logging.WARNING]
+    assert name in records[0].getMessage() and records[0].exc_info is None

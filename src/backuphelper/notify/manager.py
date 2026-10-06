@@ -13,7 +13,7 @@ import logging
 from typing import ClassVar, Type
 
 from backuphelper.config.models import NotifyConfig
-from backuphelper.notify.base import AlertEvent, Channel
+from backuphelper.notify.base import AlertEvent, Channel, ChannelNotConfigured
 from backuphelper.notify.discord import DiscordChannel
 from backuphelper.notify.email import EmailChannel
 from backuphelper.notify.healthchecks import HealthchecksChannel
@@ -70,5 +70,7 @@ class AlertManager:
         try:
             channel = channel_cls(getattr(self.cfg, name))
             channel.send(event)
+        except ChannelNotConfigured as exc:
+            logger.warning("notification channel %r skipped — not configured: %s", name, exc)
         except Exception:  # noqa: BLE001 - per-channel fault isolation
             logger.exception("notification channel %r failed", name)

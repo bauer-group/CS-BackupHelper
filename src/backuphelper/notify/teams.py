@@ -13,7 +13,13 @@ import json
 from typing import ClassVar, Optional
 
 from backuphelper.config.models import TeamsChannelConfig
-from backuphelper.notify.base import AlertEvent, Channel, Transport, http_post
+from backuphelper.notify.base import (
+    AlertEvent,
+    Channel,
+    ChannelNotConfigured,
+    Transport,
+    http_post,
+)
 
 # MessageCard themeColor hex by status (green / amber / red).
 THEME_COLOR = {"success": "2DA44E", "warning": "FFC83D", "error": "D13438"}
@@ -35,7 +41,7 @@ class TeamsChannel(Channel):
 
     def send(self, event: AlertEvent) -> None:
         if not self.cfg.url:
-            raise ValueError("teams channel requires a url")
+            raise ChannelNotConfigured("teams channel requires a url")
 
         if self.cfg.format == "messagecard":
             payload = self._message_card(event)

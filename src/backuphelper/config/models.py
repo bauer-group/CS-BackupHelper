@@ -8,6 +8,7 @@ destinations are *closed* to ``local`` / ``s3`` (the only two backends).
 
 from __future__ import annotations
 
+import re
 from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -68,6 +69,24 @@ class EmailChannelConfig(BaseModel):
     password: Optional[str] = None
     sender: Optional[str] = None
     recipients: list[str] = Field(default_factory=list)
+
+    @field_validator("recipients", mode="before")
+    @classmethod
+    def _split_recipients(cls, v: object) -> object:
+        # Compose stacks render recipients as ["${ALERT_EMAIL}"]: an unset variable
+        # yields [""] (an SMTP RCPT with an empty address) and a list-valued one
+        # yields ["a@x, b@y"]. Split every entry on "," / ";", strip whitespace
+        # and drop empties; a plain string is accepted like a one-element list.
+        items = [v] if isinstance(v, str) else v
+        if not isinstance(items, list):
+            return v
+        out: list[object] = []
+        for item in items:
+            if isinstance(item, str):
+                out.extend(p.strip() for p in re.split(r"[,;]", item) if p.strip())
+            else:
+                out.append(item)  # leave non-strings to pydantic's own validation error
+        return out
 
 
 class WebhookChannelConfig(BaseModel):

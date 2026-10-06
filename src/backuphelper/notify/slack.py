@@ -9,6 +9,7 @@ from backuphelper.config.models import SimpleUrlChannelConfig
 from backuphelper.notify.base import (
     AlertEvent,
     Channel,
+    ChannelNotConfigured,
     Transport,
     format_summary,
     http_post,
@@ -28,6 +29,6 @@ class SlackChannel(Channel):
 
     def send(self, event: AlertEvent) -> None:
         if not self.cfg.url:
-            raise ValueError("slack channel requires a url")
+            raise ChannelNotConfigured("slack channel requires a url")
         body = json.dumps({"text": format_summary(event)}).encode("utf-8")
         self._transport(self.cfg.url, body, {"Content-Type": "application/json"})
