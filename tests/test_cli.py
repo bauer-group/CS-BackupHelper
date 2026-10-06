@@ -56,6 +56,44 @@ def test_config_print_redacts_by_default(tmp_path):
     assert "hunter2" not in out.stdout
 
 
+def test_config_redacts_s3_and_notification_credentials(tmp_path):
+    # Regression: the S3 secret_key was printed in clear text by the (redacted
+    # by default) config command, because its key does not END in "secret".
+    env = _env(tmp_path)
+    env["BACKUP_CONFIG_JSON"] = json.dumps({"jobs": [{
+        "name": "j",
+        "sources": [{"type": "s3", "bucket": "src", "access_key": "SRC-AK",
+                     "secret_key": "SRC-SK"},
+                    {"type": "nocodb", "api_token": "PLUGIN-TOKEN",
+                     "client_secret": "PLUGIN-CS", "private_key": "PLUGIN-PK",
+                     "passphrase": 918273, "port": 5432}],
+        "destinations": [{"type": "s3", "bucket": "offsite", "access_key": "DST-AK",
+                          "secret_key": "S3CR3T-VALUE"}],
+        "notifications": {"email": {"password": "SMTP-PW", "recipients": ["ops@x"]},
+                          "webhook": {"secret": "HMAC-SECRET"},
+                          "ntfy": {"token": "NTFY-TOKEN"},
+                          "slack": {"url": "https://hooks.slack.com/services/T0/B0/SLACK-HOOK"},
+                          "teams": {"url": "https://prod.logic.azure.com/wf?sp=1&sig=TEAMS-SIG"},
+                          "healthchecks": {"url": "https://hc-ping.com/HC-UUID"}},
+    }]})
+    out = runner.invoke(app, ["config"], env=env)
+    assert out.exit_code == 0
+    for secret in ("S3CR3T-VALUE", "DST-AK", "SRC-AK", "SRC-SK", "PLUGIN-TOKEN",
+                   "PLUGIN-CS", "PLUGIN-PK", "918273", "SMTP-PW", "HMAC-SECRET", "NTFY-TOKEN",
+                   "SLACK-HOOK", "TEAMS-SIG", "HC-UUID"):
+        assert secret not in out.stdout, secret
+    # Structural redaction: a numeric credential is masked without breaking the
+    # JSON (a text regex would turn `"passphrase": 918273,` into invalid JSON).
+    printed = json.loads(out.stdout)
+    job = printed["jobs"][0]
+    plugin = job["sources"][1]
+    assert plugin["passphrase"] == "***" and plugin["port"] == 5432
+    dest = job["destinations"][0]
+    assert dest["bucket"] == "offsite" and dest["secret_key"] == "***"
+    assert job["notifications"]["email"]["recipients"] == ["ops@x"]
+    assert job["notifications"]["slack"]["url"] == "https://hooks.slack.com/***"
+
+
 def test_config_show_secrets_reveals(tmp_path):
     env = _env(tmp_path)
     env["BACKUP_CONFIG_JSON"] = json.dumps({

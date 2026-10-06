@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from datetime import datetime, timezone
@@ -19,7 +20,7 @@ from .config.loader import load_config
 from .config.models import Job, RootConfig
 from .healthcheck import is_healthy
 from .integrity.hashing import sha256_file
-from .logging_setup import redact, setup_logging
+from .logging_setup import redact_data, setup_logging
 from .notify.manager import AlertManager
 from .plugins.commands import register_command_plugins
 from .plugins.hooks import discover_hooks
@@ -70,8 +71,6 @@ def list_snapshots(dd: Path) -> list[tuple[str, int]]:
 
 
 def verify_snapshot(dd: Path, snapshot_id: str) -> bool:
-    import json
-
     manifest_path = dd / f"{snapshot_id}.manifest.json"
     artifact = find_artifact(dd, snapshot_id)
     if not manifest_path.exists() or artifact is None:
@@ -254,8 +253,12 @@ def config_cmd(action: str = typer.Argument("print"),
     """Print the fully-merged effective config. Secrets are REDACTED by default;
     pass --show-secrets to reveal them."""
     cfg = load_config()
-    text = cfg.model_dump_json(indent=2)
-    typer.echo(text if show_secrets else redact(text))
+    if show_secrets:
+        typer.echo(cfg.model_dump_json(indent=2))
+        return
+    # Redact the parsed structure, not the rendered text: every credential key is
+    # masked whatever its value type, and the output stays valid JSON.
+    typer.echo(json.dumps(redact_data(cfg.model_dump(mode="json")), indent=2, ensure_ascii=False))
 
 
 @app.command()
