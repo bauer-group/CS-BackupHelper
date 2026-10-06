@@ -15,13 +15,14 @@ from typing import Any, Mapping, Optional
 
 import boto3
 from botocore.client import Config
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from ..archive.bundle import create_bundle
+from ..config.models import ConfigModel
 from .base import Source, StagedComponent
 
 
-class S3SourceConfig(BaseModel):
+class S3SourceConfig(ConfigModel):
     bucket: str
     endpoint: Optional[str] = None
     region: str = "eu-central-1"

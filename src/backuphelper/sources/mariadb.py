@@ -15,8 +15,9 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
+from ..config.models import ConfigModel
 from .base import Source, SourceError, StagedComponent
 
 RunFn = Callable[..., subprocess.CompletedProcess]
@@ -39,7 +40,7 @@ _DUMP_FLAGS = (
 )
 
 
-class MySQLFamilyConfig(BaseModel):
+class MySQLFamilyConfig(ConfigModel):
     kind: str = "mariadb"
     host: str = "database"
     port: int = Field(default=3306, ge=1, le=65535)

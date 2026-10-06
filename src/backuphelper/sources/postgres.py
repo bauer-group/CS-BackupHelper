@@ -14,14 +14,15 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import Field, field_validator
 
+from ..config.models import ConfigModel
 from .base import Source, SourceError, StagedComponent
 
 RunFn = Callable[..., subprocess.CompletedProcess]
 
 
-class PostgresConfig(BaseModel):
+class PostgresConfig(ConfigModel):
     host: str = "database-server"
     port: int = Field(default=5432, ge=1, le=65535)
     database: str = "postgres"

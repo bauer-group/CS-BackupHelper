@@ -741,3 +741,43 @@ def test_retention_prunes_old_local_snapshots(tmp_path):
         run_job(job, data_dir=data, instance_name="iam", now=NOW, snapshot_id=f"2026-07-0{i}_03-00-00")
     remaining = sorted(p.name for p in data.glob("*.tar.gz"))
     assert remaining == ["2026-07-03_03-00-00.tar.gz", "2026-07-04_03-00-00.tar.gz"]
+
+
+def test_validation_errors_never_carry_secret_values(tmp_path, monkeypatch):
+    # A numeric secret from a discrete env override (JSON-parsed into an int)
+    # fails validation; pydantic used to quote it as input_value=... into the job
+    # errors, the alert and the persisted, off-site-uploaded manifest.
+    from pydantic import BaseModel
+
+    from backuphelper.config.loader import load_config
+    from backuphelper.sources.filesystem import FilesystemSource
+
+    class PluginConfig(BaseModel):  # a plugin's own model, not hiding its input
+        api_token: str
+
+    def produce(self, staging_dir):
+        PluginConfig.model_validate({"api_token": 55443322})
+
+    monkeypatch.setattr(FilesystemSource, "produce", produce)
+    cfg = load_config({
+        "BACKUP_CONFIG_JSON": json.dumps({"jobs": [{
+            "name": "main",
+            "sources": [{"type": "postgres", "host": "db", "database": "app", "user": "app"},
+                        {"type": "filesystem", "name": "plugin", "path": str(tmp_path)},
+                        {"type": "env", "name": "env", "whitelist": []}],
+            "destinations": [{"type": "local"},
+                             {"type": "s3", "bucket": "offsite", "access_key": "AK"}]}]}),
+        "BACKUP_JOBS__0__SOURCES__0__PASSWORD": "20261006",
+        "BACKUP_JOBS__0__DESTINATIONS__1__SECRET_KEY": "90817263",
+    })
+    data = tmp_path / "data"
+    spy = _Spy()
+    result = run_job(cfg.jobs[0], data_dir=data, instance_name="i", notifier=spy, now=NOW,
+                     snapshot_id="v1")
+
+    manifest = (data / "v1.manifest.json").read_text()
+    alert = " ".join(spy.events[0].errors)
+    for secret in ("20261006", "90817263", "55443322"):
+        assert secret not in manifest and secret not in alert, secret
+    assert "password" in manifest and "api_token" in manifest   # the field is still named
+    assert any("secret_key" in e for e in result.errors)

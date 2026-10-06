@@ -13,12 +13,13 @@ import os
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
+from ..config.models import ConfigModel
 from .base import Source, StagedComponent
 
 
-class EnvSnapshotConfig(BaseModel):
+class EnvSnapshotConfig(ConfigModel):
     name: str = "env"
     whitelist: list[str] = Field(default_factory=list)
 
