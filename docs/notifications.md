@@ -2,7 +2,7 @@ Backup outcomes can be pushed to one or more alert channels — email, Microsoft
 
 ## Overview
 
-Every job carries its own `notifications` block. After a run finishes, the runner builds one `AlertEvent` (status `success` / `warning` / `error`) and hands it to the `AlertManager`, which:
+Every job carries its own `notifications` block. After a run finishes — or aborts, e.g. because a `pre_backup` hook raised or the disk filled up while bundling (status `error`, `run aborted: …`) — the runner builds one `AlertEvent` (status `success` / `warning` / `error`) and hands it to the `AlertManager`, which:
 
 1. **Gates by severity** — drops the event if its status does not clear the configured `level`.
 2. **Fans out** to each name in `channels`, building only those channels.

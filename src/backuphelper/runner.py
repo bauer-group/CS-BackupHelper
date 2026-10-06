@@ -113,6 +113,17 @@ def run_job(
                              only=set(_pending_ids(data_dir, job.name)))
 
         _maybe_drop_local(job, data_dir, artifact.name, sid, delivery.stored, errors)
+    except Exception as exc:
+        # An aborted run (a raising pre_backup gate, a full disk while bundling)
+        # must not fail silently: send an error alert, then propagate as before.
+        errors.append(f"run aborted: {type(exc).__name__}: {_describe(exc)}")
+        if notifier:
+            try:
+                notifier.notify(_event(job, instance_name, sid, "error", 0, errors, started, now,
+                                       message="run aborted before it finished"))
+            except Exception:  # noqa: BLE001 - never mask the original failure
+                log.exception("could not send the alert for aborted job %s", job.name)
+        raise
     finally:
         # Always remove the staging area — also when a hook gate or the disk
         # aborts the run — so it never pollutes the data dir.
@@ -130,7 +141,8 @@ def run_job(
                        total_bytes=manifest.total_bytes, components=components, errors=errors)
 
     if notifier:
-        notifier.notify(_event(job, instance_name, sid, status, manifest, errors, started, now))
+        notifier.notify(_event(job, instance_name, sid, status, manifest.total_bytes, errors,
+                               started, now))
     if hooks:
         hooks.run("post_backup", {"job": job.name, "snapshot_id": sid, "status": status})
     log.info("job %s snapshot %s finished: %s", job.name, sid, status)
@@ -572,11 +584,13 @@ def parse_snapshot_timestamp(sid: str, fallback: datetime) -> datetime:
         return fallback
 
 
-def _event(job: Job, instance: str, sid: str, status: str, manifest: Manifest,
-           errors: list[str], started: datetime, finished: datetime) -> AlertEvent:
-    message = "snapshot completed" if status == "success" else "snapshot completed with errors"
+def _event(job: Job, instance: str, sid: str, status: str, total_bytes: int,
+           errors: list[str], started: datetime, finished: datetime,
+           message: Optional[str] = None) -> AlertEvent:
+    if message is None:
+        message = "snapshot completed" if status == "success" else "snapshot completed with errors"
     return AlertEvent(
         status=status, title=f"backup {status}", message=message, instance=instance,
-        snapshot_id=sid, job=job.name, total_bytes=manifest.total_bytes,
+        snapshot_id=sid, job=job.name, total_bytes=total_bytes,
         duration_seconds=max(0.0, (finished - started).total_seconds()), errors=list(errors),
     )

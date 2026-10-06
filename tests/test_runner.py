@@ -316,6 +316,27 @@ def test_work_dir_is_removed_when_the_run_aborts(tmp_path):
     assert not (data / ".work").exists()
 
 
+def test_an_aborted_run_still_sends_an_error_alert(tmp_path):
+    # A raising pre_backup gate (or a full disk while bundling) propagates as
+    # before, but must not fail silently: the daemon only logged it, no alert.
+    import pytest
+
+    from backuphelper.plugins.hooks import HookRegistry
+
+    def refuse(_ctx):
+        raise RuntimeError("app refused to quiesce")
+
+    hooks = HookRegistry()
+    hooks.register("pre_backup", refuse)
+    spy = _Spy()
+    with pytest.raises(RuntimeError, match="quiesce"):
+        run_job(_fs_job(tmp_path), data_dir=tmp_path / "data", instance_name="i",
+                notifier=spy, now=NOW, snapshot_id="u5", hooks=hooks)
+    [event] = spy.events
+    assert event.status == "error" and event.snapshot_id == "u5"
+    assert event.errors == ["run aborted: RuntimeError: app refused to quiesce"]
+
+
 class _MemoryS3:
     """boto3 stand-in for a reachable bucket that keeps its objects in memory."""
 
