@@ -94,11 +94,11 @@ def run_job(
     write_manifest(manifest, sidecar)
 
     destinations = _build_destinations(job.destinations, data_dir)
-    _upload(destinations, artifact, sidecar, sid, errors)
+    stored = _upload(destinations, artifact, sidecar, sid, errors)
     for dest in destinations:
         _apply_retention(dest, job.retention, now, errors)
 
-    _maybe_drop_local(job, data_dir, artifact.name, sid, errors)
+    _maybe_drop_local(job, data_dir, artifact.name, sid, stored, errors)
 
     shutil.rmtree(work, ignore_errors=True)
     try:  # remove the now-empty .work parent so it never pollutes the data dir
@@ -338,19 +338,31 @@ def _has_local(specs: list[DestinationSpec]) -> bool:
 
 
 def _maybe_drop_local(job: Job, data_dir: Path, artifact_name: str, sid: str,
-                      errors: list[str]) -> None:
-    """Drop the local copy after a clean off-site upload when keep_local is off."""
-    has_s3 = any(s.type == "s3" for s in job.destinations)
-    if job.keep_local or not has_s3 or not _has_local(job.destinations):
+                      stored: list[Destination], errors: list[str]) -> None:
+    """keep_local=false: drop the local copy, but only once an off-site destination
+    has actually stored THIS snapshot. What counts is the upload result, not the
+    configured specs — an S3 spec may be unconfigured (empty bucket) or may have
+    failed, and deleting the local copy then deletes the only one."""
+    if job.keep_local or not _has_local(job.destinations):
         return
-    if any("upload failed" in e for e in errors):
-        return  # keep local as a safety net when off-site upload had trouble
+    if not any(isinstance(d, LocalDestination) for d in stored):
+        return  # the local put itself failed — nothing to drop
+    if not any(not isinstance(d, LocalDestination) for d in stored):
+        log.warning("keep_local is false but no off-site destination stored snapshot %s"
+                    " — keeping the local copy", sid)
+        errors.append("keep_local is false but no off-site destination stored the snapshot"
+                      " — kept the local copy")
+        return
     (data_dir / artifact_name).unlink(missing_ok=True)
     (data_dir / f"{sid}.manifest.json").unlink(missing_ok=True)
 
 
 def _upload(destinations: list[Destination], artifact: Path, sidecar: Path, sid: str,
-            errors: list[str]) -> None:
+            errors: list[str]) -> list[Destination]:
+    """Put the archive + sidecar to every destination; return the ones that stored
+    BOTH (a remote copy without its manifest cannot be listed, verified or
+    hydrated). S3 puts verify the remote object size before they return."""
+    stored: list[Destination] = []
     for dest in destinations:
         try:
             dest.put(artifact, artifact.name)
@@ -358,6 +370,9 @@ def _upload(destinations: list[Destination], artifact: Path, sidecar: Path, sid:
         except Exception as exc:  # noqa: BLE001
             log.error("upload to %s failed: %s", type(dest).__name__, exc)
             errors.append(f"upload failed: {exc}")
+            continue
+        stored.append(dest)
+    return stored
 
 
 def _apply_retention(dest: Destination, cfg: RetentionConfig, now: datetime,

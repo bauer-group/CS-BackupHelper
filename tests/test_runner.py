@@ -103,6 +103,81 @@ def test_keep_local_false_drops_local_copy_after_s3_upload(tmp_path):
     assert list(data.glob("*.tar.gz")) == []
 
 
+def _s3_dest(**over):
+    spec = {"type": "s3", "bucket": "offsite", "access_key": "k", "secret_key": "s",
+            "region": "eu-central-1"}
+    spec.update(over)
+    return spec
+
+
+class _EmptyS3:
+    """boto3 stand-in for a reachable, empty bucket: retention lists no keys
+    (without it, list_keys would retry with real backoff sleeps)."""
+
+    def get_paginator(self, _name):
+        return self
+
+    def paginate(self, **_kwargs):
+        return [{}]
+
+
+def test_keep_local_false_keeps_the_only_copy_when_s3_is_unconfigured(tmp_path):
+    # Regression: an S3 destination with an empty bucket is skipped, yet
+    # keep_local=false still deleted the local archive — the ONLY copy — and the
+    # run reported success.
+    data = tmp_path / "data"
+    job = _fs_job(tmp_path, keep_local=False,
+                  destinations=[{"type": "local"}, _s3_dest(bucket="")])
+    spy = _Spy()
+    result = run_job(job, data_dir=data, instance_name="i", notifier=spy, now=NOW,
+                     snapshot_id="k2")
+    assert (data / "k2.tar.gz").exists() and (data / "k2.manifest.json").exists()
+    assert result.archive == data / "k2.tar.gz"
+    assert result.status == "warning"
+    assert any("keep_local" in e for e in result.errors)
+    assert spy.events[0].status == "warning"
+
+
+def test_keep_local_false_keeps_local_when_the_s3_upload_fails(tmp_path, monkeypatch):
+    from backuphelper.destinations.s3 import S3Destination
+
+    def failing_put(self, local_path, key):
+        raise RuntimeError("upload size mismatch")
+
+    monkeypatch.setattr(S3Destination, "_build_client", lambda self: _EmptyS3())
+    monkeypatch.setattr(S3Destination, "put", failing_put)
+    data = tmp_path / "data"
+    job = _fs_job(tmp_path, keep_local=False,
+                  destinations=[{"type": "local"}, _s3_dest(ensure_bucket=False)])
+    result = run_job(job, data_dir=data, instance_name="i", now=NOW, snapshot_id="k3")
+    assert (data / "k3.tar.gz").exists()
+    assert result.status == "warning"
+
+
+def test_keep_local_false_keeps_local_when_only_the_remote_manifest_fails(tmp_path, monkeypatch):
+    # A remote archive without its sidecar cannot be listed, verified or
+    # hydrated, so it does not count as an off-site copy.
+    from backuphelper.destinations.s3 import S3Destination
+
+    uploaded = []
+
+    def put(self, local_path, key):
+        if key.endswith(".manifest.json"):
+            raise RuntimeError("manifest upload rejected")
+        uploaded.append(key)
+
+    monkeypatch.setattr(S3Destination, "_build_client", lambda self: _EmptyS3())
+    monkeypatch.setattr(S3Destination, "put", put)
+    data = tmp_path / "data"
+    job = _fs_job(tmp_path, keep_local=False,
+                  destinations=[{"type": "local"}, _s3_dest(ensure_bucket=False)])
+    result = run_job(job, data_dir=data, instance_name="i", now=NOW, snapshot_id="k4")
+    assert uploaded == ["k4.tar.gz"]  # the archive itself did reach the bucket
+    assert (data / "k4.tar.gz").exists() and (data / "k4.manifest.json").exists()
+    assert result.status == "warning"
+    assert any(e.startswith("upload failed:") for e in result.errors)
+
+
 def test_unconfigured_s3_destination_is_skipped_local_only(tmp_path):
     data = tmp_path / "data"
     job = _fs_job(tmp_path, destinations=[{"type": "local"}, {"type": "s3", "bucket": ""}])

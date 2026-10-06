@@ -119,8 +119,9 @@ class Job(BaseModel):
     name: str = "main"
     sources: list[SourceSpec] = Field(default_factory=list)
     destinations: list[DestinationSpec] = Field(default_factory=_default_destinations)
-    # When false, delete the local copy after a successful off-site S3 upload
-    # (local stays the working store; the archive lives only off-site).
+    # When false, delete the local copy once an off-site destination has stored
+    # this snapshot (local stays the working store; the archive lives only
+    # off-site). Without a successful off-site copy the local one is kept.
     keep_local: bool = True
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
