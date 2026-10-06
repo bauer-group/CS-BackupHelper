@@ -89,11 +89,12 @@ class FilesystemSource(Source):
             if not root.exists():
                 continue
             # os.walk instead of Path.rglob: rglob silently skips a directory it
-            # cannot list. An unreadable root leaves nothing to back up and fails
-            # the source; an unreadable directory below it is skipped and
-            # reported, so the readable rest is still backed up.
+            # cannot list. An unreadable `path` leaves nothing to back up and
+            # fails the source; any unreadable directory below it - including a
+            # `subdirs` root - is skipped and reported, so the readable rest is
+            # still backed up.
             for dirpath, dirnames, filenames in os.walk(
-                root, onerror=lambda err, root=root: _unreadable_dir(err, root, base, skipped)
+                root, onerror=lambda err: _unreadable_dir(err, base, skipped)
             ):
                 current = Path(dirpath)
                 dirnames[:] = [d for d in dirnames if not self._pruned(current / d, base)]
@@ -123,10 +124,13 @@ class FilesystemSource(Source):
 _MAX_WARNINGS = 20
 
 
-def _unreadable_dir(error: OSError, root: Path, base: Path, skipped: list[str]) -> None:
-    if not error.filename or Path(error.filename) == root:
-        raise error  # the path-group itself is unreadable: nothing to back up
-    rel = Path(error.filename).relative_to(base).as_posix()
+def _unreadable_dir(error: OSError, base: Path, skipped: list[str]) -> None:
+    if not error.filename or Path(error.filename) == base:
+        raise error  # the configured path itself is unreadable: nothing to back up
+    path = Path(error.filename)
+    if path.name == "lost+found":
+        return  # mkfs artefact on a mounted filesystem root, never application data
+    rel = path.relative_to(base).as_posix()
     skipped.append(f"{rel}/ (directory not readable: {error.strerror})")
 
 
