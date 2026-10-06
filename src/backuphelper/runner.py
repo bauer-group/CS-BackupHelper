@@ -387,7 +387,12 @@ def _maybe_encrypt(archive: Path, job: Job, work: Path, sid: str, errors: list[s
     try:
         return encrypt(archive, out, mode=mode, recipient=job.encryption.recipient)
     except Exception as exc:  # noqa: BLE001
-        errors.append(f"encryption failed: {_describe(exc)}")
+        # Availability over confidentiality (docs/encryption.md): the run still
+        # stores the plaintext archive, but it must never do so silently.
+        reason = _describe(exc)
+        log.error("encryption (%s) failed: %s - snapshot %s is stored UNENCRYPTED on "
+                  "every destination", mode, reason, sid)
+        errors.append(f"encryption ({mode}) failed, snapshot stored UNENCRYPTED: {reason}")
         return archive
 
 

@@ -56,7 +56,12 @@ So `backuphelper restore <snapshot_id>` transparently decrypts an encrypted snap
 
 ## Failure behavior
 
-If encryption fails (tool missing, bad recipient, non-zero exit), the runner records an error, **falls back to storing the unencrypted archive**, and reports the job as a `warning` rather than aborting. Treat a warning status on an encryption-enabled job as a signal that the stored copy may be unencrypted, and check the logs.
+If encryption fails (tool missing, bad recipient, non-zero exit), the runner **falls back to storing the unencrypted archive** and reports the job as a `warning` rather than aborting (availability over confidentiality). It never does so silently:
+
+- an `ERROR` log line: `encryption (age) failed: <reason> - snapshot <id> is stored UNENCRYPTED on every destination`
+- the job error, and with it the alert at `level: warnings` or `all`: `encryption (age) failed, snapshot stored UNENCRYPTED: <reason>`
+
+Treat that message as an incident: fix the tool or recipient, then delete or re-create the unencrypted snapshot on every destination.
 
 ## Key generation
 

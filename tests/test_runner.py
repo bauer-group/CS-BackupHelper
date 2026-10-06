@@ -76,6 +76,31 @@ def test_a_failing_source_yields_partial_warning(tmp_path):
     assert spy.events[0].status == "warning"
 
 
+def test_failed_encryption_warns_that_the_snapshot_is_unencrypted(tmp_path, monkeypatch, caplog):
+    import backuphelper.runner as runner
+    from backuphelper.encryption.engine import EncryptionError
+
+    def boom(*_a, **_k):
+        raise EncryptionError("age binary not found")
+
+    monkeypatch.setattr(runner, "encrypt", boom)
+    data = tmp_path / "data"
+    spy = _Spy()
+    job = _fs_job(tmp_path, encryption={"mode": "age", "recipient": "age1abc"})
+    with caplog.at_level("ERROR", logger="backuphelper.runner"):
+        result = run_job(job, data_dir=data, instance_name="iam", notifier=spy, now=NOW,
+                         snapshot_id="enc1")
+    # availability over confidentiality: the snapshot exists, but unencrypted ...
+    assert (data / "enc1.tar.gz").exists()
+    assert not list(data.glob("enc1.tar.gz.*"))
+    # ... and every channel says so explicitly
+    assert result.status == "warning"
+    assert any("UNENCRYPTED" in e and "age binary not found" in e for e in result.errors)
+    assert spy.events[0].status == "warning"
+    assert any("UNENCRYPTED" in e for e in spy.events[0].errors)
+    assert any(r.levelname == "ERROR" and "UNENCRYPTED" in r.getMessage() for r in caplog.records)
+
+
 def test_keep_local_false_drops_local_copy_after_s3_upload(tmp_path):
     import boto3
     from moto import mock_aws
