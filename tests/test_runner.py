@@ -167,9 +167,42 @@ def test_a_source_that_cannot_be_built_is_recorded_in_the_manifest(tmp_path):
     assert comp.kind == "nocodb" and comp.size == 0 and comp.sha256 == "" and comp.error
 
 
-def test_an_unreadable_directory_is_recorded_as_a_failed_component(tmp_path, monkeypatch):
-    # End to end: a directory the backup user cannot list used to be archived as
-    # an empty, healthy-looking component (sha256 set, no error, status success).
+def test_an_unreadable_subdirectory_keeps_the_readable_rest_and_warns(tmp_path, monkeypatch):
+    # End to end: an unreadable directory below a filesystem source used to vanish
+    # silently. The readable rest is backed up and restorable, the job warns.
+    import os
+
+    real_scandir = os.scandir
+    locked = tmp_path / "uploads" / "locked"
+
+    def scandir(path="."):
+        if str(path) == str(locked):
+            raise PermissionError(13, "Permission denied", str(path))
+        return real_scandir(path)
+
+    data = tmp_path / "data"
+    job = _fs_job(tmp_path)
+    locked.mkdir()
+    (locked / "secret.txt").write_text("S")
+    monkeypatch.setattr(os, "scandir", scandir)
+    spy = _Spy()
+    result = run_job(job, data_dir=data, instance_name="i", notifier=spy, now=NOW,
+                     snapshot_id="f4")
+    assert result.status == "warning"
+    assert any(e.startswith("uploads: incomplete, skipped: locked/") for e in result.errors)
+    assert spy.events[0].status == "warning"
+    comp = {c.name: c for c in read_manifest(sidecar_path(data, "f4")).components}["uploads"]
+    assert comp.error is None and comp.size > 0 and len(comp.sha256) == 64
+    assert comp.metadata["file_count"] == 1
+    assert comp.metadata["warnings"] == ["locked/ (directory not readable: Permission denied)"]
+    monkeypatch.setattr(os, "scandir", real_scandir)
+    (tmp_path / "uploads" / "a.txt").unlink()
+    assert restore_snapshot(job, data_dir=data, snapshot_id="f4", only=["uploads"])
+    assert (tmp_path / "uploads" / "a.txt").read_text() == "A"
+
+
+def test_an_unreadable_root_is_recorded_as_a_failed_component(tmp_path, monkeypatch):
+    # An unreadable path-group root leaves nothing to back up: errored component.
     import os
 
     real_scandir = os.scandir

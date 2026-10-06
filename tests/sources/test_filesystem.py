@@ -127,18 +127,56 @@ def _deny_listing(monkeypatch, *denied: Path):
     monkeypatch.setattr(os, "scandir", scandir)
 
 
-def test_unreadable_subdirectory_fails_the_source(tmp_path, monkeypatch):
-    # Regression: Path.rglob swallowed the PermissionError, so an unreadable
-    # directory was archived as empty and the run reported success.
-    import pytest
-
+def test_unreadable_subdirectory_is_skipped_and_reported(tmp_path, monkeypatch):
+    # Regression: Path.rglob swallowed the PermissionError silently. The readable
+    # rest must still be backed up, and the gap reported in the metadata.
     src_dir = tmp_path / "files"
     src_dir.mkdir()
     _tree(src_dir)
     _deny_listing(monkeypatch, src_dir / "sub")
     src = FilesystemSource({"type": "filesystem", "name": "files", "path": str(src_dir)})
-    with pytest.raises(PermissionError, match="sub"):
-        src.produce(tmp_path / "stage")
+    staged = src.produce(tmp_path / "stage")[0]
+    assert staged.error is None
+    assert _members(staged.path) == ["a.txt", "cache/junk.tmp"]
+    assert staged.metadata["file_count"] == 2
+    assert staged.metadata["warnings"] == ["sub/ (directory not readable: Permission denied)"]
+
+
+def test_unreadable_file_is_skipped_and_reported(tmp_path, monkeypatch):
+    import backuphelper.sources.filesystem as fs
+
+    src_dir = tmp_path / "files"
+    src_dir.mkdir()
+    _tree(src_dir)
+    locked = src_dir / "sub" / "b.txt"
+
+    def fake_open(path, *args, **kwargs):
+        if str(path) == str(locked):
+            raise PermissionError(13, "Permission denied", str(path))
+        return open(path, *args, **kwargs)
+
+    monkeypatch.setattr(fs, "open", fake_open, raising=False)
+    staged = FilesystemSource({"type": "filesystem", "name": "files",
+                               "path": str(src_dir)}).produce(tmp_path / "stage")[0]
+    assert staged.error is None
+    assert _members(staged.path) == ["a.txt", "cache/junk.tmp"]
+    assert staged.metadata["file_count"] == 2
+    assert staged.metadata["warnings"] == ["sub/b.txt (file not readable: Permission denied)"]
+
+
+def test_many_unreadable_entries_are_capped_in_the_metadata(tmp_path, monkeypatch):
+    src_dir = tmp_path / "files"
+    src_dir.mkdir()
+    dirs = []
+    for i in range(25):
+        d = src_dir / f"d{i:02d}"
+        d.mkdir()
+        dirs.append(d)
+    _deny_listing(monkeypatch, *dirs)
+    staged = FilesystemSource({"type": "filesystem", "name": "files",
+                               "path": str(src_dir)}).produce(tmp_path / "stage")[0]
+    warnings = staged.metadata["warnings"]
+    assert len(warnings) == 21 and warnings[-1] == "... and 5 more"
 
 
 def test_unreadable_root_fails_the_source(tmp_path, monkeypatch):
@@ -162,3 +200,4 @@ def test_a_dir_star_exclude_skips_an_unreadable_directory(tmp_path, monkeypatch)
                             "exclude": ["sub/*"]})
     staged = src.produce(tmp_path / "stage")
     assert _members(staged[0].path) == ["a.txt", "cache/junk.tmp"]
+    assert "warnings" not in staged[0].metadata  # excluded on purpose: no warning

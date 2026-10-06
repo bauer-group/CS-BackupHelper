@@ -35,6 +35,7 @@ from .logging_setup import redact
 from .notify.base import AlertEvent
 from .plugins.hooks import HookRegistry
 from .plugins.registry import build_source
+from .sources.base import StagedComponent
 from .retention import Snapshot
 from .retention import manager as retention_manager
 
@@ -368,7 +369,22 @@ def _produce(job: Job, staging: Path, errors: list[str]) -> list[Component]:
             else:
                 components.append(Component(name=sc.name, kind=sc.kind, size=sc.path.stat().st_size,
                                             sha256=sha256_file(sc.path), metadata=sc.metadata))
+                _report_source_warnings(sc, errors)
     return components
+
+
+def _report_source_warnings(sc: StagedComponent, errors: list[str]) -> None:
+    """A source can report non-fatal problems in ``metadata["warnings"]`` (e.g.
+    unreadable files it skipped): the component stays valid and restorable, but
+    the job degrades to warning so the gap is logged and alerted, never silent."""
+    warnings = [str(w) for w in (sc.metadata.get("warnings") or [])]
+    if not warnings:
+        return
+    shown = "; ".join(warnings[:5]) + (f" (+{len(warnings) - 5} more in the manifest)"
+                                       if len(warnings) > 5 else "")
+    message = redact(f"incomplete, skipped: {shown}")
+    log.warning("source %s is %s", sc.name, message)
+    errors.append(f"{sc.name}: {message}")
 
 
 def _remove_new_entries(directory: Path, before: set[Path]) -> None:
