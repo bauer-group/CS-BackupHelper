@@ -109,3 +109,56 @@ def test_missing_path_produces_errored_component(tmp_path):
     src = FilesystemSource({"type": "filesystem", "name": "u", "path": str(tmp_path / "nope")})
     c = src.produce(tmp_path / "stage")[0]
     assert c.error is not None and c.path is None
+
+
+def _deny_listing(monkeypatch, *denied: Path):
+    # chmod cannot simulate this: the test stage runs as root, which reads
+    # everything. Make os.scandir refuse the given directories instead.
+    import os
+
+    real_scandir = os.scandir
+    blocked = {str(p) for p in denied}
+
+    def scandir(path="."):
+        if str(path) in blocked:
+            raise PermissionError(13, "Permission denied", str(path))
+        return real_scandir(path)
+
+    monkeypatch.setattr(os, "scandir", scandir)
+
+
+def test_unreadable_subdirectory_fails_the_source(tmp_path, monkeypatch):
+    # Regression: Path.rglob swallowed the PermissionError, so an unreadable
+    # directory was archived as empty and the run reported success.
+    import pytest
+
+    src_dir = tmp_path / "files"
+    src_dir.mkdir()
+    _tree(src_dir)
+    _deny_listing(monkeypatch, src_dir / "sub")
+    src = FilesystemSource({"type": "filesystem", "name": "files", "path": str(src_dir)})
+    with pytest.raises(PermissionError, match="sub"):
+        src.produce(tmp_path / "stage")
+
+
+def test_unreadable_root_fails_the_source(tmp_path, monkeypatch):
+    import pytest
+
+    src_dir = tmp_path / "files"
+    src_dir.mkdir()
+    _tree(src_dir)
+    _deny_listing(monkeypatch, src_dir)
+    src = FilesystemSource({"type": "filesystem", "name": "files", "path": str(src_dir)})
+    with pytest.raises(PermissionError):
+        src.produce(tmp_path / "stage")
+
+
+def test_a_dir_star_exclude_skips_an_unreadable_directory(tmp_path, monkeypatch):
+    src_dir = tmp_path / "files"
+    src_dir.mkdir()
+    _tree(src_dir)
+    _deny_listing(monkeypatch, src_dir / "sub")
+    src = FilesystemSource({"type": "filesystem", "name": "files", "path": str(src_dir),
+                            "exclude": ["sub/*"]})
+    staged = src.produce(tmp_path / "stage")
+    assert _members(staged[0].path) == ["a.txt", "cache/junk.tmp"]

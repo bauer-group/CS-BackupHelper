@@ -142,6 +142,29 @@ def test_a_source_that_cannot_be_built_is_recorded_in_the_manifest(tmp_path):
     assert comp.kind == "nocodb" and comp.size == 0 and comp.sha256 == "" and comp.error
 
 
+def test_an_unreadable_directory_is_recorded_as_a_failed_component(tmp_path, monkeypatch):
+    # End to end: a directory the backup user cannot list used to be archived as
+    # an empty, healthy-looking component (sha256 set, no error, status success).
+    import os
+
+    real_scandir = os.scandir
+    locked = tmp_path / "uploads"
+
+    def scandir(path="."):
+        if str(path) == str(locked):
+            raise PermissionError(13, "Permission denied", str(path))
+        return real_scandir(path)
+
+    data = tmp_path / "data"
+    job = _fs_job(tmp_path)
+    monkeypatch.setattr(os, "scandir", scandir)
+    result = run_job(job, data_dir=data, instance_name="i", now=NOW, snapshot_id="f3")
+    assert result.status == "warning"
+    comp = {c.name: c for c in read_manifest(sidecar_path(data, "f3")).components}["uploads"]
+    assert comp.size == 0 and comp.sha256 == ""
+    assert comp.error.startswith("PermissionError:") and "uploads" in comp.error
+
+
 def _s3_dest(**over):
     spec = {"type": "s3", "bucket": "offsite", "access_key": "k", "secret_key": "s",
             "region": "eu-central-1"}

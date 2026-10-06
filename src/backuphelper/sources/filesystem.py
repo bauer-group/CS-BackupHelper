@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import fnmatch
 import gzip
+import os
 import shutil
 import tarfile
 from pathlib import Path
@@ -82,18 +83,38 @@ class FilesystemSource(Source):
         for root in roots:
             if not root.exists():
                 continue
-            for path in root.rglob("*"):
-                if not path.is_file():
-                    continue
-                arcname = path.relative_to(base).as_posix()
-                if self._excluded(arcname):
-                    continue
-                members.append((arcname, path))
+            # os.walk instead of Path.rglob: rglob silently skips a directory it
+            # cannot list, so an unreadable tree was archived as EMPTY and the run
+            # reported success. Re-raising makes the source fail visibly (the
+            # runner records it as an errored component).
+            for dirpath, dirnames, filenames in os.walk(root, onerror=_reraise):
+                current = Path(dirpath)
+                dirnames[:] = [d for d in dirnames if not self._pruned(current / d, base)]
+                for name in filenames:
+                    path = current / name
+                    if not path.is_file():
+                        continue
+                    arcname = path.relative_to(base).as_posix()
+                    if self._excluded(arcname):
+                        continue
+                    members.append((arcname, path))
         members.sort(key=lambda m: m[0])
         return members
 
     def _excluded(self, arcname: str) -> bool:
         return any(fnmatch.fnmatch(arcname, pat) for pat in self.cfg.exclude)
+
+    def _pruned(self, directory: Path, base: Path) -> bool:
+        """A directory matched by a ``<dir>/*`` exclude is not entered at all:
+        every file below it is excluded anyway, and this lets an operator exclude
+        a directory the backup user may not read (e.g. ``lost+found/*``)."""
+        rel = directory.relative_to(base).as_posix()
+        return any(pat.endswith("/*") and fnmatch.fnmatch(rel, pat[:-2])
+                   for pat in self.cfg.exclude)
+
+
+def _reraise(error: OSError) -> None:
+    raise error
 
 
 def _write_deterministic_targz(members: list[tuple[str, Path]], out: Path) -> None:
