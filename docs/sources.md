@@ -17,6 +17,8 @@ A job's `sources` is a list. Every entry is an object with a `type` discriminato
 
 Every source's output filename is derived from its component `name` (or, for databases, the database name). Restore matches a bundle component back to its source by that name, so keep `name` stable across runs.
 
+**A failing source never disappears.** Whether a source reports an error (a failed `pg_dump`, a missing `path`) or raises one (a `PermissionError`, an unreachable plugin backend), the manifest still lists its component with size `0`, an empty `sha256` and the error text, the job degrades to `warning` (or `error` if no source succeeded), and `show <id>` makes the gap visible. Partial output of a raising source is discarded, not bundled.
+
 ---
 
 ## `postgres`

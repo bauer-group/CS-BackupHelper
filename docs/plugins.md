@@ -40,7 +40,11 @@ class Source(ABC):
 - `produce(staging_dir)` writes files into `staging_dir` and returns a list of
   `StagedComponent`. Report a failure by returning a component with `error=` set
   and `path=None` rather than raising, so one bad source degrades the job to a
-  partial snapshot instead of aborting it.
+  partial snapshot instead of aborting it. If `produce` (or the constructor)
+  raises anyway, the engine records it the same way — a component with the
+  source's component name, `kind` = its type, size `0`, empty `sha256` and
+  `error` = `"<ExceptionType>: <message>"` — and discards any files the source
+  had already written to `staging_dir`, so a half-written output never ships.
 - `restore(staged_dir)` is **optional**. Omit it and the base raises
   `NotImplementedError`; implement it for sources that can be restored.
 

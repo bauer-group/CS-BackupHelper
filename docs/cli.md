@@ -89,7 +89,7 @@ Exit codes: `0`.
 
 ### `show`
 
-Prints the sidecar manifest (`<id>.manifest.json`) for one snapshot — the component list, sizes, per-component sha256, `total_bytes`, `created_at`, and the `archive_sha256` used by `verify`.
+Prints the sidecar manifest (`<id>.manifest.json`) for one snapshot — the component list, sizes, per-component sha256, `total_bytes`, `created_at`, and the `archive_sha256` used by `verify`. A source that failed during the backup is listed too, with size `0`, an empty `sha256` and its `error` text.
 
 | Argument | Description |
 | -------- | ----------- |

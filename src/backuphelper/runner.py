@@ -327,12 +327,21 @@ def _produce(job: Job, staging: Path, errors: list[str]) -> list[Component]:
             # DB-only deployment does not degrade to a partial warning every run.
             log.info("s3 source has no bucket configured — skipping (object storage not backed up)")
             continue
+        before = set(staging.iterdir())
         try:
             source = build_source(data)
             staged = source.produce(staging)
         except Exception as exc:  # noqa: BLE001 - one bad source degrades to partial
-            log.error("source %s failed: %s", spec.type, exc)
-            errors.append(f"{spec.type}: {exc}")
+            # Record the failure like a returned error (size 0, no hash) so the
+            # manifest — and `show` — never silently omits a configured source,
+            # and drop any half-written output so it is not shipped in the archive.
+            name = _spec_component_name(spec)
+            message = f"{type(exc).__name__}: {exc}"
+            log.error("source %s (%s) failed: %s", name, spec.type, message)
+            errors.append(f"{name}: {message}")
+            components.append(Component(name=name, kind=spec.type, size=0, sha256="",
+                                        error=message))
+            _remove_new_entries(staging, before)
             continue
         for sc in staged:
             if sc.error or not sc.path:
@@ -343,6 +352,14 @@ def _produce(job: Job, staging: Path, errors: list[str]) -> list[Component]:
                 components.append(Component(name=sc.name, kind=sc.kind, size=sc.path.stat().st_size,
                                             sha256=sha256_file(sc.path), metadata=sc.metadata))
     return components
+
+
+def _remove_new_entries(directory: Path, before: set[Path]) -> None:
+    for path in set(directory.iterdir()) - before:
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+        else:
+            path.unlink(missing_ok=True)
 
 
 def _maybe_encrypt(archive: Path, job: Job, work: Path, sid: str, errors: list[str]) -> Path:
