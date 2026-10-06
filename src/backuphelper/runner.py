@@ -160,6 +160,8 @@ def restore_snapshot(
                   snapshot_id)
         return False
     specs = {_spec_component_name(s): s for s in job.sources}
+    if only and not _only_is_restorable(only, manifest, specs, job.name):
+        return False
 
     with tempfile.TemporaryDirectory() as td:
         work = Path(td)
@@ -181,6 +183,32 @@ def restore_snapshot(
             hooks.run("post_restore", {"job": job.name, "snapshot_id": snapshot_id,
                                        "extracted": extracted, "manifest": manifest, "ok": ok})
     return ok
+
+
+def _only_is_restorable(only: set[str], manifest: Manifest, specs: dict[str, SourceSpec],
+                        job_name: str) -> bool:
+    """Validate an ``only`` selection BEFORE any hook or component touches live
+    data: a typo, a component that failed at backup time or one without a source
+    in this job would otherwise be skipped silently and report success."""
+    by_name = {c.name: c for c in manifest.components}
+    problems = []
+    for name in sorted(only):
+        comp = by_name.get(name)
+        if comp is None:
+            problems.append(f"component {name!r} is not in snapshot {manifest.snapshot_id}")
+        elif comp.error:
+            problems.append(f"component {name!r} failed at backup time and holds no data: "
+                            f"{comp.error}")
+        elif name not in specs:
+            problems.append(f"component {name!r} has no matching source in job {job_name!r}")
+    if not problems:
+        return True
+    for problem in problems:
+        log.error("cannot restore: %s", problem)
+    valid = sorted(n for n, c in by_name.items() if not c.error and n in specs)
+    log.error("nothing was restored — valid components of snapshot %s: %s",
+              manifest.snapshot_id, ", ".join(valid) or "none")
+    return False
 
 
 def _restore_component(spec: SourceSpec, comp: Component, extracted: Path, work: Path) -> bool:
