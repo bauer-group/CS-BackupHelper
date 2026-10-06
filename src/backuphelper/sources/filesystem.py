@@ -62,10 +62,14 @@ class FilesystemSource(Source):
         if not base.exists():
             return [StagedComponent(name=self.cfg.name, kind=self.type, path=None,
                                     error=f"path not found: {base}")]
-        members = self._collect(base)
-        _write_deterministic_targz(members, out)
+        skipped: list[str] = []
+        members = self._collect(base, skipped)
+        written = _write_deterministic_targz(members, out, skipped)
+        metadata: dict[str, Any] = {"path": str(base), "file_count": written}
+        if skipped:
+            metadata["warnings"] = _summarize(skipped)
         return [StagedComponent(name=self.cfg.name, kind=self.type, path=out,
-                                metadata={"path": str(base), "file_count": len(members)})]
+                                metadata=metadata)]
 
     def restore(self, staged_dir: Path) -> None:
         """Overlay the extracted component tree onto the configured path."""
@@ -78,17 +82,19 @@ class FilesystemSource(Source):
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(item, dest)
 
-    def _collect(self, base: Path) -> list[tuple[str, Path]]:
+    def _collect(self, base: Path, skipped: list[str]) -> list[tuple[str, Path]]:
         roots = [base / s for s in self.cfg.subdirs] if self.cfg.subdirs else [base]
         members: list[tuple[str, Path]] = []
         for root in roots:
             if not root.exists():
                 continue
             # os.walk instead of Path.rglob: rglob silently skips a directory it
-            # cannot list, so an unreadable tree was archived as EMPTY and the run
-            # reported success. Re-raising makes the source fail visibly (the
-            # runner records it as an errored component).
-            for dirpath, dirnames, filenames in os.walk(root, onerror=_reraise):
+            # cannot list. An unreadable root leaves nothing to back up and fails
+            # the source; an unreadable directory below it is skipped and
+            # reported, so the readable rest is still backed up.
+            for dirpath, dirnames, filenames in os.walk(
+                root, onerror=lambda err, root=root: _unreadable_dir(err, root, base, skipped)
+            ):
                 current = Path(dirpath)
                 dirnames[:] = [d for d in dirnames if not self._pruned(current / d, base)]
                 for name in filenames:
@@ -114,19 +120,43 @@ class FilesystemSource(Source):
                    for pat in self.cfg.exclude)
 
 
-def _reraise(error: OSError) -> None:
-    raise error
+_MAX_WARNINGS = 20
 
 
-def _write_deterministic_targz(members: list[tuple[str, Path]], out: Path) -> None:
-    """Write a byte-deterministic tar.gz: sorted members, mtime=0, no gzip name."""
+def _unreadable_dir(error: OSError, root: Path, base: Path, skipped: list[str]) -> None:
+    if not error.filename or Path(error.filename) == root:
+        raise error  # the path-group itself is unreadable: nothing to back up
+    rel = Path(error.filename).relative_to(base).as_posix()
+    skipped.append(f"{rel}/ (directory not readable: {error.strerror})")
+
+
+def _summarize(skipped: list[str]) -> list[str]:
+    if len(skipped) <= _MAX_WARNINGS:
+        return skipped
+    return skipped[:_MAX_WARNINGS] + [f"... and {len(skipped) - _MAX_WARNINGS} more"]
+
+
+def _write_deterministic_targz(members: list[tuple[str, Path]], out: Path,
+                               skipped: list[str]) -> int:
+    """Write a byte-deterministic tar.gz: sorted members, mtime=0, no gzip name.
+
+    A file that cannot be opened is skipped and reported in ``skipped``; the
+    number of archived files is returned."""
+    written = 0
     with open(out, "wb") as raw:
         with gzip.GzipFile(filename="", fileobj=raw, mode="wb", mtime=0) as gz:
             with tarfile.open(fileobj=gz, mode="w:") as tar:
                 for arcname, path in members:
-                    info = tar.gettarinfo(str(path), arcname=arcname)
-                    info.mtime = 0
-                    info.uid = info.gid = 0
-                    info.uname = info.gname = ""
-                    with open(path, "rb") as fh:
+                    try:
+                        fh = open(path, "rb")
+                    except OSError as exc:
+                        skipped.append(f"{arcname} (file not readable: {exc.strerror})")
+                        continue
+                    with fh:
+                        info = tar.gettarinfo(str(path), arcname=arcname)
+                        info.mtime = 0
+                        info.uid = info.gid = 0
+                        info.uname = info.gname = ""
                         tar.addfile(info, fh)
+                    written += 1
+    return written

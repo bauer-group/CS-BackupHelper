@@ -68,6 +68,11 @@ class StagedComponent:
 Raise `backuphelper.sources.base.SourceError` from `restore` (or from `produce`
 if you must fail hard) to signal a source-level failure.
 
+To report a **non-fatal** problem (data you had to skip, a partial export), keep
+the component valid and put human-readable strings into `metadata["warnings"]`.
+The runner logs them, adds them to the job errors (the job degrades to
+`warning` and alerts at `level: warnings`), and the component stays restorable.
+
 ### Complete minimal example
 
 A plugin package that adds a `nocodb` source backing up a NocoDB base via its
