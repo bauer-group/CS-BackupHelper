@@ -11,6 +11,7 @@ generic building block, and the notifier is injected (any object with
 
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 from dataclasses import dataclass, field
@@ -74,39 +75,52 @@ def run_job(
     started = now
     errors: list[str] = []
 
-    if hooks:
-        hooks.run("pre_backup", {"job": job.name, "snapshot_id": sid})
+    try:
+        if hooks:
+            hooks.run("pre_backup", {"job": job.name, "snapshot_id": sid})
 
-    components = _produce(job, staging, errors)
-    ok = [c for c in components if not c.error]
+        components = _produce(job, staging, errors)
+        ok = [c for c in components if not c.error]
 
-    embedded = Manifest.build(snapshot_id=sid, instance_name=instance_name,
-                              components=components, created_at=now.isoformat())
-    (staging / "manifest.json").write_text(embedded.model_dump_json(indent=2), encoding="utf-8")
+        embedded = Manifest.build(snapshot_id=sid, instance_name=instance_name,
+                                  components=components, created_at=now.isoformat())
+        (staging / "manifest.json").write_text(embedded.model_dump_json(indent=2), encoding="utf-8")
 
-    archive = work / f"{sid}.tar.gz"
-    create_bundle(staging, archive)
-    artifact = _maybe_encrypt(archive, job, work, sid, errors)
+        archive = work / f"{sid}.tar.gz"
+        create_bundle(staging, archive)
+        artifact = _maybe_encrypt(archive, job, work, sid, errors)
 
-    manifest = Manifest.build(snapshot_id=sid, instance_name=instance_name, components=components,
-                              created_at=now.isoformat(), archive_sha256=sha256_file(artifact))
-    sidecar = work / f"{sid}.manifest.json"
-    write_manifest(manifest, sidecar)
+        manifest = Manifest.build(snapshot_id=sid, instance_name=instance_name,
+                                  components=components, created_at=now.isoformat(),
+                                  archive_sha256=sha256_file(artifact))
+        sidecar = work / f"{sid}.manifest.json"
+        write_manifest(manifest, sidecar)
 
-    destinations = _build_destinations(job.destinations, data_dir)
-    stored = _upload(destinations, artifact, sidecar, sid, errors)
-    for dest in destinations:
-        _apply_retention(dest, job.retention, now, errors)
+        delivery = _deliver(job, data_dir, artifact, sidecar, sid, errors)
+        if not delivery.stored:
+            log.error("snapshot %s was not stored on any destination", sid)
+            errors.append("snapshot was not stored on any destination — this run left no copy")
+        _track_offsite(job, data_dir, sid, delivery, errors)
+        for dest in delivery.destinations:
+            _apply_retention(dest, job.retention, now, errors)
+        if delivery.fallback is not None:
+            # The data dir may hold other jobs' snapshots: prune only this job's
+            # own fallback copies there, never the whole directory.
+            _apply_retention(delivery.fallback, job.retention, now, errors,
+                             only=set(_pending_ids(data_dir, job.name)))
 
-    _maybe_drop_local(job, data_dir, artifact.name, sid, stored, errors)
+        _maybe_drop_local(job, data_dir, artifact.name, sid, delivery.stored, errors)
+    finally:
+        # Always remove the staging area — also when a hook gate or the disk
+        # aborts the run — so it never pollutes the data dir.
+        shutil.rmtree(work, ignore_errors=True)
+        try:  # and the now-empty .work parent
+            (data_dir / ".work").rmdir()
+        except OSError:
+            pass
 
-    shutil.rmtree(work, ignore_errors=True)
-    try:  # remove the now-empty .work parent so it never pollutes the data dir
-        (data_dir / ".work").rmdir()
-    except OSError:
-        pass
-
-    status = "success" if not errors else ("warning" if ok else "error")
+    # A run that left no copy anywhere is an error, whatever the sources did.
+    status = "success" if not errors else ("warning" if ok and delivery.stored else "error")
     stored_path = data_dir / artifact.name
     stored = stored_path if stored_path.exists() else None
     result = JobResult(status=status, snapshot_id=sid, archive=stored,
@@ -315,7 +329,8 @@ def _maybe_encrypt(archive: Path, job: Job, work: Path, sid: str, errors: list[s
         return archive
 
 
-def _build_destinations(specs: list[DestinationSpec], data_dir: Path) -> list[Destination]:
+def _build_destinations(specs: list[DestinationSpec], data_dir: Path,
+                        errors: list[str]) -> list[Destination]:
     destinations: list[Destination] = []
     for spec in specs:
         if spec.type == "local":
@@ -327,14 +342,105 @@ def _build_destinations(specs: list[DestinationSpec], data_dir: Path) -> list[De
                 # simply not configured; skip it (keeps local-only deployments).
                 log.info("s3 destination has no bucket configured — skipping (local-only)")
                 continue
-            destinations.append(S3Destination(data))
-    if not destinations:
-        destinations.append(LocalDestination(data_dir))  # never silently drop the backup
+            try:  # builds the client and (ensure_bucket) heads/creates the bucket
+                destinations.append(S3Destination(data))
+            except Exception as exc:  # noqa: BLE001 - a bad target must not lose the snapshot
+                log.error("s3 destination %r unavailable: %s", data["bucket"], exc)
+                errors.append(f"s3 destination {data['bucket']!r} unavailable: {exc}")
     return destinations
+
+
+@dataclass
+class _Delivery:
+    destinations: list[Destination]  # built from the job's own specs
+    stored: list[Destination]  # every destination that stored this snapshot
+    fallback: Optional[LocalDestination] = None  # set when the data dir only stood in
+
+
+def _deliver(job: Job, data_dir: Path, artifact: Path, sidecar: Path, sid: str,
+             errors: list[str]) -> _Delivery:
+    """Build every destination and upload to it.
+
+    A destination that cannot be built or written degrades the job to a warning
+    while the others still receive the snapshot. With nothing configured at all
+    the data dir is the silent default. If destinations ARE configured but none
+    stored the snapshot, it is kept in the data dir as a fallback copy instead of
+    being deleted with the work dir; _track_offsite ships it later."""
+    failures: list[str] = []
+    destinations = _build_destinations(job.destinations, data_dir, failures)
+    if not destinations and not failures:
+        destinations = [LocalDestination(data_dir)]  # nothing configured: local default
+    stored = _upload(destinations, artifact, sidecar, sid, failures)
+    fallback = None
+    if not stored and not any(isinstance(d, LocalDestination) for d in destinations):
+        fallback = LocalDestination(data_dir)
+        stored = _upload([fallback], artifact, sidecar, sid, failures)
+        if stored:
+            log.warning("snapshot %s reached no destination — kept it in %s", sid, data_dir)
+            failures.append("no destination stored the snapshot — kept it in the local data"
+                            " dir until an off-site destination is reachable again")
+    errors.extend(failures)
+    return _Delivery(destinations, stored, fallback)
 
 
 def _has_local(specs: list[DestinationSpec]) -> bool:
     return any(s.type == "local" for s in specs)
+
+
+def _offsite_configured(job: Job) -> bool:
+    return any(s.type == "s3" and (s.model_extra or {}).get("bucket") for s in job.destinations)
+
+
+_PENDING_SUFFIX = ".offsite-pending.json"
+
+
+def _pending_ids(data_dir: Path, job_name: str) -> list[str]:
+    """Snapshots of this job that are in the data dir but not yet off-site."""
+    ids = []
+    for marker in sorted(data_dir.glob(f"*{_PENDING_SUFFIX}")):
+        try:
+            owner = json.loads(marker.read_text(encoding="utf-8")).get("job")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if owner == job_name:
+            ids.append(marker.name[: -len(_PENDING_SUFFIX)])
+    return ids
+
+
+def _track_offsite(job: Job, data_dir: Path, sid: str, delivery: _Delivery,
+                   errors: list[str]) -> None:
+    """Keep the off-site copy complete across an outage.
+
+    When the job has an off-site (S3) target configured but no off-site
+    destination stored this snapshot, its copy in the data dir is marked pending
+    (``<id>.offsite-pending.json``, naming the job). The next run that reaches an
+    off-site destination uploads every pending snapshot of the job there and
+    drops the marker — and the local copy too when the job keeps none (S3-only,
+    or keep_local=false). Retention and ``prune`` remove a marker together with
+    its snapshot (same ``<id>.`` prefix)."""
+    offsite = [d for d in delivery.stored if not isinstance(d, LocalDestination)]
+    if not offsite:
+        if _offsite_configured(job) and delivery.stored:
+            (data_dir / f"{sid}{_PENDING_SUFFIX}").write_text(
+                json.dumps({"job": job.name}), encoding="utf-8")
+        return
+    keeps_local = job.keep_local and _has_local(job.destinations)
+    for pending in _pending_ids(data_dir, job.name):
+        marker = data_dir / f"{pending}{_PENDING_SUFFIX}"
+        artifact = _find_artifact(data_dir, pending)
+        sidecar = data_dir / f"{pending}.manifest.json"
+        if artifact is None or not sidecar.exists():
+            marker.unlink(missing_ok=True)  # pruned or removed in the meantime
+            continue
+        failures: list[str] = []
+        if len(_upload(offsite, artifact, sidecar, pending, failures)) < len(offsite):
+            errors.extend(f"pending snapshot {pending}: {f}" for f in failures)
+            continue  # stays pending, retried on the next run
+        marker.unlink(missing_ok=True)
+        if not keeps_local:
+            artifact.unlink(missing_ok=True)
+            sidecar.unlink(missing_ok=True)
+        log.info("uploaded pending snapshot %s off-site", pending)
 
 
 def _maybe_drop_local(job: Job, data_dir: Path, artifact_name: str, sid: str,
@@ -348,10 +454,12 @@ def _maybe_drop_local(job: Job, data_dir: Path, artifact_name: str, sid: str,
     if not any(isinstance(d, LocalDestination) for d in stored):
         return  # the local put itself failed — nothing to drop
     if not any(not isinstance(d, LocalDestination) for d in stored):
-        log.warning("keep_local is false but no off-site destination stored snapshot %s"
-                    " — keeping the local copy", sid)
-        errors.append("keep_local is false but no off-site destination stored the snapshot"
-                      " — kept the local copy")
+        later = (" — kept the local copy; the next run that reaches an off-site"
+                 " destination uploads it" if _offsite_configured(job)
+                 else " (no S3 bucket configured) — kept the local copy")
+        log.warning("keep_local is false but no off-site destination stored snapshot %s%s",
+                    sid, later)
+        errors.append(f"keep_local is false but no off-site destination stored the snapshot{later}")
         return
     (data_dir / artifact_name).unlink(missing_ok=True)
     (data_dir / f"{sid}.manifest.json").unlink(missing_ok=True)
@@ -376,11 +484,12 @@ def _upload(destinations: list[Destination], artifact: Path, sidecar: Path, sid:
 
 
 def _apply_retention(dest: Destination, cfg: RetentionConfig, now: datetime,
-                     errors: list[str]) -> None:
+                     errors: list[str], only: Optional[set[str]] = None) -> None:
     try:
         # Only top-level artifacts are snapshots; ignore any nested staging keys.
         sids = sorted({k[: -len(".manifest.json")] for k in dest.list_keys()
-                       if k.endswith(".manifest.json") and "/" not in k})
+                       if k.endswith(".manifest.json") and "/" not in k
+                       and (only is None or k[: -len(".manifest.json")] in only)})
         snapshots = [Snapshot(s, parse_snapshot_timestamp(s, now)) for s in sids]
         for pruned in retention_manager.select_prunable(snapshots, cfg, now):
             for key in list(dest.list_keys(prefix=f"{pruned}.")):
