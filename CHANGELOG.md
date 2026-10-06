@@ -4,6 +4,23 @@ All notable changes to this project are documented here. This file is maintained
 automatically by [semantic-release](https://github.com/semantic-release/semantic-release)
 on every release to `main`.
 
+## [1.7.5](https://github.com/bauer-group/CS-BackupHelper/compare/v1.7.4...v1.7.5) (2026-10-06)
+
+### 🐛 Bug Fixes
+
+* **config:** kept secret values out of validation error texts ([51696ca](https://github.com/bauer-group/CS-BackupHelper/commit/51696ca6c20109d894f7cbf84ce12f374a1c5750))
+* **logging:** redacted secret_key and other credential keys ([6d123a4](https://github.com/bauer-group/CS-BackupHelper/commit/6d123a4384284f188a953c6575395ee7437b3dbd))
+* **notify:** dropped empty email recipients instead of sending to them ([f7249d2](https://github.com/bauer-group/CS-BackupHelper/commit/f7249d2bcf0eff262014572dcced2f8b2a44d90f))
+* **restore:** failed fast on an --only name that cannot be restored ([6506bc9](https://github.com/bauer-group/CS-BackupHelper/commit/6506bc978baebb4651ff6cd8c8eda98519782c80))
+* **runner:** degraded a failing destination instead of aborting the run ([d1d5072](https://github.com/bauer-group/CS-BackupHelper/commit/d1d5072dbd197c76ac81ac82c3c889d0f5a4e608))
+* **runner:** kept the local copy unless an off-site upload succeeded ([1268224](https://github.com/bauer-group/CS-BackupHelper/commit/1268224bef392653da8295f6a8076c2008d8fd8c))
+* **runner:** recorded a raising source as an errored manifest component ([85da3d7](https://github.com/bauer-group/CS-BackupHelper/commit/85da3d76eecc53d77e56104fc3fc881d11fd314a))
+* **runner:** sent an error alert when a run aborts ([9ffe3d9](https://github.com/bauer-group/CS-BackupHelper/commit/9ffe3d948c32ad0a985b2e53dd14d74fc0bb8de6))
+* **runner:** warned loudly when encryption fails and the snapshot ships unencrypted ([a377c11](https://github.com/bauer-group/CS-BackupHelper/commit/a377c1106b7cb41a2e03b863590204f727522a66))
+* **sources:** backed up the readable part of a filesystem source and reported the rest ([eea5a73](https://github.com/bauer-group/CS-BackupHelper/commit/eea5a73e6c37524b8559d89f787c34aa3b9be123))
+* **sources:** failed a filesystem source on an unreadable directory ([4e3c238](https://github.com/bauer-group/CS-BackupHelper/commit/4e3c2382c0dff9bac6f746f15ea2f3696c3ddaa2))
+* **sources:** kept readable subdirs when one subdirs root is unreadable ([f21122b](https://github.com/bauer-group/CS-BackupHelper/commit/f21122b72e0e9a96d799c7750ec37c6ad86c8c85))
+
 ## [1.7.4](https://github.com/bauer-group/CS-BackupHelper/compare/v1.7.3...v1.7.4) (2026-10-02)
 
 ### 🔧 Maintenance
