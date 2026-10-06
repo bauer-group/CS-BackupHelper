@@ -128,6 +128,21 @@ def test_restore_roundtrip_via_cli(tmp_path):
     assert (tmp_path / "uploads" / "a.txt").read_text() == "A"
 
 
+def test_restore_only_unknown_component_fails_and_lists_valid_names(tmp_path):
+    env = _env(tmp_path)
+    assert runner.invoke(app, ["create"], env=env).exit_code == 0
+    sid = runner.invoke(app, ["list"], env=env).stdout.split()[0]
+
+    import shutil
+
+    shutil.rmtree(tmp_path / "uploads")
+    result = runner.invoke(app, ["restore", sid, "--force", "--only", "upload"], env=env)
+    assert result.exit_code == 1
+    assert "restore complete" not in result.output
+    assert "uploads" in result.output  # the valid component name is shown
+    assert not (tmp_path / "uploads").exists()
+
+
 def test_download_copies_artifact(tmp_path):
     env = _env(tmp_path)
     runner.invoke(app, ["create"], env=env)

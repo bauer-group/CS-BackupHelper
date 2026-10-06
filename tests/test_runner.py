@@ -533,6 +533,64 @@ def test_restore_roundtrip_filesystem(tmp_path):
     assert (src / "sub" / "b.txt").read_text() == "B"
 
 
+def _pre_restore_spy():
+    from backuphelper.plugins.hooks import HookRegistry
+
+    calls = []
+    hooks = HookRegistry()
+    hooks.register("pre_restore", calls.append)
+    return hooks, calls
+
+
+def test_restore_only_unknown_component_fails_before_touching_anything(tmp_path, caplog):
+    # Regression: an --only value that matches no component restored nothing and
+    # still reported success ("restore complete", exit 0).
+    import logging
+
+    data = tmp_path / "data"
+    job = _fs_job(tmp_path)  # components: uploads, env
+    run_job(job, data_dir=data, instance_name="i", now=NOW, snapshot_id="o1")
+    shutil.rmtree(tmp_path / "uploads")
+    hooks, calls = _pre_restore_spy()
+    with caplog.at_level(logging.ERROR, logger="backuphelper.runner"):
+        ok = restore_snapshot(job, data_dir=data, snapshot_id="o1", only={"upload"}, hooks=hooks)
+    assert ok is False
+    assert calls == []                       # the pre_restore gate never ran
+    assert not (tmp_path / "uploads").exists()
+    assert "'upload'" in caplog.text
+    assert "env, uploads" in caplog.text     # lists the valid component names
+
+
+def test_restore_only_rejects_a_component_that_failed_at_backup(tmp_path):
+    data = tmp_path / "data"
+    job = _fs_job(tmp_path)
+    job.sources.append(SourceSpec(type="filesystem", name="missing", path=str(tmp_path / "nope")))
+    run_job(job, data_dir=data, instance_name="i", now=NOW, snapshot_id="o2")
+    hooks, calls = _pre_restore_spy()
+    assert restore_snapshot(job, data_dir=data, snapshot_id="o2", only={"missing"},
+                            hooks=hooks) is False
+    assert calls == []
+
+
+def test_restore_only_rejects_a_component_without_a_source_in_the_job(tmp_path):
+    data = tmp_path / "data"
+    run_job(_fs_job(tmp_path), data_dir=data, instance_name="i", now=NOW, snapshot_id="o3")
+    other = Job.model_validate({"name": "other", "sources": [{"type": "env", "name": "env"}]})
+    hooks, calls = _pre_restore_spy()
+    assert restore_snapshot(other, data_dir=data, snapshot_id="o3", only={"uploads"},
+                            hooks=hooks) is False
+    assert calls == []
+
+
+def test_restore_only_valid_component_still_restores(tmp_path):
+    data = tmp_path / "data"
+    job = _fs_job(tmp_path)
+    run_job(job, data_dir=data, instance_name="i", now=NOW, snapshot_id="o4")
+    shutil.rmtree(tmp_path / "uploads")
+    assert restore_snapshot(job, data_dir=data, snapshot_id="o4", only={"uploads"}) is True
+    assert (tmp_path / "uploads" / "a.txt").read_text() == "A"
+
+
 def test_restore_missing_snapshot_returns_false(tmp_path):
     job = _fs_job(tmp_path)
     assert restore_snapshot(job, data_dir=tmp_path / "data", snapshot_id="nope") is False

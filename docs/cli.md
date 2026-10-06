@@ -128,7 +128,7 @@ Exit codes: `0` archive matches manifest · `2` mismatch, missing archive, or mi
 | `snapshot_id` | The snapshot id to restore. |
 | `--force`, `-f` | Skip the interactive "this overwrites live data" confirmation. Required for non-interactive runs. |
 | `--job <name>` | Select which configured job's sources to restore into. Defaults to the first job. |
-| `--only <component>` | Restore only the named component(s); repeatable. Component names are those shown in the manifest (e.g. `database`, `uploads`, `s3`). |
+| `--only <component>` | Restore only the named component(s); repeatable. Component names are those shown in the manifest (e.g. `database`, `uploads`, `s3`). Every name is checked **before anything is touched**: a name that is not in the snapshot, that failed at backup time, or that has no matching source in the selected job aborts the restore with exit `1` and logs the valid component names. |
 
 ```bash
 # Restore everything for the (single) configured job, no prompt
@@ -141,7 +141,7 @@ docker compose run --rm backup \
   restore 2026-07-05_03-15-00 --job main --only uploads --force
 ```
 
-Exit codes: `0` restore completed (or aborted at the confirmation prompt) · `1` no matching job, or restore finished with per-component errors.
+Exit codes: `0` restore completed (or aborted at the confirmation prompt) · `1` no matching job, snapshot missing or corrupt, an `--only` name that cannot be restored (nothing is touched), or restore finished with per-component errors.
 
 ### `prune`
 
@@ -217,7 +217,7 @@ Exit codes: `0` last backup is fresh (or none yet) · `1` last backup is stale.
 | `list` | always | — | — |
 | `show` | printed | not found | — |
 | `verify` | matches manifest | — | mismatch / missing |
-| `restore` | completed or aborted | no job / restore errors | — |
+| `restore` | completed or aborted | no job / invalid `--only` / restore errors | — |
 | `download` | copied | not found | — |
 | `prune` | always | — | — |
 | `config` | always | — | — |
