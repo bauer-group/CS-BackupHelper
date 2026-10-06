@@ -107,7 +107,7 @@ A container runs **N jobs**; the common case is one. A single job may list sever
 | `name` | `"main"` | Job name (used in schedule ids, alerts, restore `--job`) |
 | `sources` | `[]` | What to back up — see [sources](sources.md) |
 | `destinations` | `[{"type":"local"}]` | Where to store it — `local` and/or `s3`, see [destinations](destinations.md) |
-| `keep_local` | `true` | When `false`, delete the local copy after a successful off-site S3 upload |
+| `keep_local` | `true` | When `false`, delete the local copy once an off-site S3 destination has stored this snapshot (archive + manifest uploaded, size verified). If none did — S3 unconfigured (empty bucket), unreachable, or the upload failed — the local copy is kept and the run reports a `warning` |
 | `schedule` | see below | When to run |
 | `retention` | see below | How many/long to keep — see [retention](retention.md) |
 | `encryption` | `{"mode":"none"}` | Optional age/gpg — see [encryption](encryption.md) |

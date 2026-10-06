@@ -18,6 +18,7 @@ Every destination implements the same contract — `put` / `get` / `list_keys` /
 - List only `local` → snapshots stay on the local data dir (the default).
 - List only `s3` → snapshots ship off-site to the bucket.
 - List **both** → the archive and its sidecar are written to each; you keep a local copy *and* an off-site copy.
+- List **both** with `"keep_local": false` → the local copy is deleted, but only after an off-site destination has actually stored *this* snapshot (archive and manifest uploaded, remote size verified). When no off-site copy exists — the S3 bucket is unset, the target is unreachable, or the upload failed — the local copy is kept and the job reports a `warning`, so the only copy is never deleted.
 
 The archive and its `<snapshot-id>.manifest.json` sidecar are `put` to **every** configured destination, and retention (count / age / GFS / smart-last) is applied independently **per destination**. A failed upload to one destination degrades the job to a partial/warning state rather than aborting the others.
 
