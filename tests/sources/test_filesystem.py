@@ -142,6 +142,33 @@ def test_unreadable_subdirectory_is_skipped_and_reported(tmp_path, monkeypatch):
     assert staged.metadata["warnings"] == ["sub/ (directory not readable: Permission denied)"]
 
 
+def test_unreadable_subdirs_root_is_skipped_and_the_other_subdirs_kept(tmp_path, monkeypatch):
+    # With `subdirs` every subdir is a walk root; one unreadable root (e.g.
+    # wp-content/plugins 0750) must not drop the readable siblings.
+    src_dir = tmp_path / "wp-content"
+    for sub in ("plugins", "themes", "languages"):
+        (src_dir / sub).mkdir(parents=True)
+        (src_dir / sub / f"{sub}.txt").write_text(sub)
+    _deny_listing(monkeypatch, src_dir / "plugins")
+    staged = FilesystemSource({"type": "filesystem", "name": "content", "path": str(src_dir),
+                               "subdirs": "plugins,themes,languages"}).produce(tmp_path / "stage")[0]
+    assert staged.error is None
+    assert _members(staged.path) == ["languages/languages.txt", "themes/themes.txt"]
+    assert staged.metadata["warnings"] == ["plugins/ (directory not readable: Permission denied)"]
+
+
+def test_unreadable_lost_and_found_is_skipped_without_a_warning(tmp_path, monkeypatch):
+    src_dir = tmp_path / "files"
+    src_dir.mkdir()
+    _tree(src_dir)
+    (src_dir / "lost+found").mkdir()
+    _deny_listing(monkeypatch, src_dir / "lost+found")
+    staged = FilesystemSource({"type": "filesystem", "name": "files",
+                               "path": str(src_dir)}).produce(tmp_path / "stage")[0]
+    assert staged.error is None and "warnings" not in staged.metadata
+    assert _members(staged.path) == ["a.txt", "cache/junk.tmp", "sub/b.txt"]
+
+
 def test_unreadable_file_is_skipped_and_reported(tmp_path, monkeypatch):
     import backuphelper.sources.filesystem as fs
 
