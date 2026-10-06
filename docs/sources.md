@@ -189,7 +189,7 @@ Archives **one named path-group** into a byte-deterministic `<name>.tar.gz` (sor
 }
 ```
 
-Arcnames are always relative to `path` (even when `subdirs` narrows the roots), so excludes and the restored layout are anchored to `path`. A missing `path` produces an errored component (the job degrades to a partial snapshot rather than failing outright).
+Arcnames are always relative to `path` (even when `subdirs` narrows the roots), so excludes and the restored layout are anchored to `path`. A missing `path` produces an errored component (the job degrades to a partial snapshot rather than failing outright). A file or directory the backup user cannot read fails the whole component the same way (`PermissionError: ... '<path>'` in the manifest and the alert) instead of being skipped silently. To leave such a directory out on purpose, exclude it with a `<dir>/*` pattern (e.g. `"lost+found/*"`): a directory matched by such a pattern is not entered at all.
 
 **Restore.** Supported. The extracted tree is overlaid file-by-file onto `path` (parent directories created as needed). This is an overlay copy — it does not delete files that are absent from the archive.
 
