@@ -234,7 +234,9 @@ are defined phases reserved for finer dump-level wiring.
 
 `HookRegistry.run(phase, context)` calls each registered hook and **does not
 swallow exceptions** — a raising hook propagates. So a `pre_*` hook is a gate: if
-it raises, the operation stops before any destructive work. The canonical use is
+it raises, the operation stops before any destructive work. An aborted backup run
+still sends an `error` alert (`run aborted: <ExceptionType>: <message>`) before
+the exception propagates, and its staging area is removed. The canonical use is
 a `pre_restore` `ENCRYPTION_KEY` cross-check that refuses to restore an archive
 encrypted under a different key:
 
