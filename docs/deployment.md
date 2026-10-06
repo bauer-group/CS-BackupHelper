@@ -14,7 +14,7 @@ depends on the argument:
 | `restore <id>` | Restore a snapshot (destructive; `--force` skips the confirm prompt). |
 | `prune` | Apply retention to local snapshots (`--dry-run`, `--keep N`). |
 | `download <id> <dir>` | Copy a snapshot's archive + manifest out of `/data`. |
-| `config [print] [--redacted]` | Print the fully-merged effective config, secrets masked with `--redacted`. |
+| `config [print] [--show-secrets]` | Print the fully-merged effective config; secrets are masked unless `--show-secrets` is passed. |
 | `healthcheck` | Exit `0` if the last backup is fresh (see below). |
 
 ### Daemon vs one-shot deployment

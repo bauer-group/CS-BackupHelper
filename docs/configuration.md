@@ -63,10 +63,10 @@ Never put a secret literally in the config. Reference an env var instead:
 
 In Docker Compose, write `$${VAR}` (doubled `$`) so Compose leaves the placeholder literal for BackupHelper to resolve at runtime rather than substituting it into the rendered file.
 
-Inspect the effective config with secrets masked:
+Inspect the effective config — secrets are masked by default (`--show-secrets` reveals them; see [cli](cli.md#config) for the exact redaction rule):
 
 ```bash
-backuphelper config --redacted
+backuphelper config
 ```
 
 ## Config schema

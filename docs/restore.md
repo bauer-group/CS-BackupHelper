@@ -93,7 +93,7 @@ A worked example: the application's Postgres database and its `/uploads` tree ar
 
 ```bash
 # 1. Confirm the DB clients and config are what you expect
-docker compose run --rm backup config --redacted
+docker compose run --rm backup config
 
 # 2. Find the newest snapshot
 docker compose run --rm backup list

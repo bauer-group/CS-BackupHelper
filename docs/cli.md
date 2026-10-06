@@ -182,17 +182,20 @@ Exit codes: `0` copied · `1` snapshot not found.
 
 ### `config`
 
-Prints the fully-merged effective configuration as JSON, after all layers and `${VAR}` interpolation are resolved — the fastest way to confirm what the engine actually sees.
+Prints the fully-merged effective configuration as JSON, after all layers and `${VAR}` interpolation are resolved — the fastest way to confirm what the engine actually sees. Secrets are **redacted by default** (rule below), so the output can go into a ticket.
 
 | Option / Argument | Description |
 | ----------------- | ----------- |
 | `action` | Positional, defaults to `print`. The command always prints the effective config. |
-| `--redacted` | Mask secrets (passwords, keys, tokens) in the output. Use this before sharing config in a ticket or log. |
+| `--show-secrets` | Print secrets in cleartext instead of `***`. |
+| `--redacted` | Deprecated no-op (redaction is the default); kept so old scripts keep working. |
 
 ```bash
-docker compose run --rm backup config
-docker compose run --rm backup config --redacted
+docker compose run --rm backup config                  # redacted
+docker compose run --rm backup config --show-secrets   # cleartext — do not share
 ```
+
+Redaction works on the parsed config, so the output stays valid JSON. A value is masked when its key name (case-insensitive) contains `password`, `passwd`, `passphrase`, `secret`, `token`, `credential`, `signature`, `api_key`, `access_key` or `private_key` (with or without separator), ends in a qualified `_key` / `-key` / `.key`, or is `sig` — e.g. `secret_key`, `client_secret`, `smtp_password`, the webhook `secret`, the ntfy `token`, `sse_customer_key`. A notification channel's `url` is cut down to `scheme://host/***`, because for Slack, Discord, Teams and healthchecks the URL itself is the credential, and the ntfy `topic` is masked. Unset values (`null`, `""`) stay visible so you can see whether a secret is configured at all, and credentials embedded in other URLs (`https://user:pass@host`, `?token=…`) are masked too. A bare `key` and hashes such as `sha256` are **not** masked: in this engine `key` is an object-store path, which is diagnostic, not secret. Redaction goes by key name, so a plugin field that holds a secret under an unrelated name (e.g. `dsn`) is only masked where it embeds `user:pass@`. The same rule masks `key=value` / `"key": "value"` pairs in every log line.
 
 Exit codes: `0`.
 
