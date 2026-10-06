@@ -3,7 +3,7 @@
 import json
 import shutil
 import tarfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from backuphelper.archive.manifest import read_manifest, sidecar_path
 from backuphelper.config.models import Job, SourceSpec
@@ -176,6 +176,247 @@ def test_keep_local_false_keeps_local_when_only_the_remote_manifest_fails(tmp_pa
     assert (data / "k4.tar.gz").exists() and (data / "k4.manifest.json").exists()
     assert result.status == "warning"
     assert any(e.startswith("upload failed:") for e in result.errors)
+
+
+class _ForbiddenS3:
+    """boto3 stand-in for rejected credentials: head_bucket answers 403."""
+
+    def head_bucket(self, **_kwargs):
+        from botocore.exceptions import ClientError
+
+        raise ClientError({"Error": {"Code": "403", "Message": "Forbidden"}}, "HeadBucket")
+
+
+def test_unreachable_s3_destination_degrades_to_warning_and_keeps_local(tmp_path, monkeypatch):
+    # Regression: S3Destination construction (client + ensure_bucket) ran outside
+    # any try, so a 403 / DNS error aborted the run — no snapshot stored, no alert,
+    # .work left behind.
+    from backuphelper.destinations.s3 import S3Destination
+
+    monkeypatch.setattr(S3Destination, "_build_client", lambda self: _ForbiddenS3())
+    data = tmp_path / "data"
+    spy = _Spy()
+    job = _fs_job(tmp_path, keep_local=False, destinations=[{"type": "local"}, _s3_dest()])
+    result = run_job(job, data_dir=data, instance_name="i", notifier=spy, now=NOW,
+                     snapshot_id="u1")
+    assert result.status == "warning"
+    assert (data / "u1.tar.gz").exists() and (data / "u1.manifest.json").exists()
+    assert any("offsite" in e and "403" in e for e in result.errors)
+    assert spy.events[0].status == "warning" and spy.events[0].errors == result.errors
+    assert not (data / ".work").exists()
+
+
+def test_s3_only_job_keeps_the_snapshot_locally_when_s3_is_unreachable(tmp_path, monkeypatch):
+    from backuphelper.destinations.s3 import S3Destination
+
+    monkeypatch.setattr(S3Destination, "_build_client", lambda self: _ForbiddenS3())
+    data = tmp_path / "data"
+    job = _fs_job(tmp_path, destinations=[_s3_dest()])
+    result = run_job(job, data_dir=data, instance_name="i", now=NOW, snapshot_id="u2")
+    assert result.status == "warning"
+    assert result.archive == data / "u2.tar.gz" and result.archive.exists()
+    assert any("kept it in the local data dir" in e for e in result.errors)
+
+
+def test_s3_only_job_keeps_the_snapshot_locally_when_the_upload_fails(tmp_path, monkeypatch):
+    from backuphelper.destinations.s3 import S3Destination
+
+    def failing_put(self, local_path, key):
+        raise RuntimeError("connection reset")
+
+    monkeypatch.setattr(S3Destination, "_build_client", lambda self: _EmptyS3())
+    monkeypatch.setattr(S3Destination, "put", failing_put)
+    data = tmp_path / "data"
+    job = _fs_job(tmp_path, destinations=[_s3_dest(ensure_bucket=False)])
+    result = run_job(job, data_dir=data, instance_name="i", now=NOW, snapshot_id="u3")
+    assert result.status == "warning"
+    assert (data / "u3.tar.gz").exists() and (data / "u3.manifest.json").exists()
+    assert any("upload failed" in e for e in result.errors)
+    assert any("kept it in the local data dir" in e for e in result.errors)
+
+
+def test_work_dir_is_removed_when_the_run_aborts(tmp_path):
+    # A pre_backup gate may abort the run by raising; the staging area must not
+    # be left behind in the data dir.
+    import pytest
+
+    from backuphelper.plugins.hooks import HookRegistry
+
+    def refuse(_ctx):
+        raise RuntimeError("app refused to quiesce")
+
+    hooks = HookRegistry()
+    hooks.register("pre_backup", refuse)
+    data = tmp_path / "data"
+    with pytest.raises(RuntimeError):
+        run_job(_fs_job(tmp_path), data_dir=data, instance_name="i", now=NOW,
+                snapshot_id="u4", hooks=hooks)
+    assert not (data / ".work").exists()
+
+
+class _MemoryS3:
+    """boto3 stand-in for a reachable bucket that keeps its objects in memory."""
+
+    def __init__(self):
+        self.objects = {}
+
+    def head_bucket(self, **_kwargs):
+        return {}
+
+    def put_object(self, Bucket, Key, Body):
+        self.objects[Key] = Body
+
+    def head_object(self, Bucket, Key):
+        return {"ContentLength": len(self.objects[Key])}
+
+    def get_paginator(self, _name):
+        return self
+
+    def paginate(self, Bucket, Prefix):
+        return [{"Contents": [{"Key": k} for k in sorted(self.objects) if k.startswith(Prefix)]}]
+
+    def delete_object(self, Bucket, Key):
+        self.objects.pop(Key, None)
+
+
+def _sid(hours):
+    when = NOW + timedelta(hours=hours)
+    return when, when.strftime("%Y-%m-%d_%H-%M-%S")
+
+
+def test_fallback_retention_never_prunes_other_jobs_snapshots(tmp_path, monkeypatch):
+    # examples/config/multi-job.json: a local-only job and an S3-only job share
+    # one data dir. While S3 is down, the S3-only job's retention (count 2) must
+    # prune only its own fallback copies, not the other job's snapshots.
+    from backuphelper.destinations.s3 import S3Destination
+
+    data = tmp_path / "data"
+    local_job = _fs_job(tmp_path, name="database-hourly", retention={"count": 48})
+    for hour in range(10):
+        when, sid = _sid(hour)
+        run_job(local_job, data_dir=data, instance_name="i", now=when, snapshot_id=sid)
+    monkeypatch.setattr(S3Destination, "_build_client", lambda self: _ForbiddenS3())
+    offsite_job = Job.model_validate({
+        "name": "files-offsite", "sources": [{"type": "env", "name": "env", "whitelist": []}],
+        "destinations": [_s3_dest()], "retention": {"count": 2}})
+    fallback_ids = []
+    for hour in range(10, 13):
+        when, sid = _sid(hour)
+        result = run_job(offsite_job, data_dir=data, instance_name="i", now=when, snapshot_id=sid)
+        assert result.status == "warning"
+        fallback_ids.append(sid)
+
+    left = {p.name[: -len(".manifest.json")] for p in data.glob("*.manifest.json")}
+    assert {_sid(h)[1] for h in range(10)} <= left          # the other job's 10 survive
+    assert left - {_sid(h)[1] for h in range(10)} == set(fallback_ids[1:])  # own count=2
+
+
+def test_pending_snapshot_is_uploaded_once_s3_is_back(tmp_path, monkeypatch):
+    # An S3-only job's fallback copy must not stay in the data dir forever: it
+    # would never reach the bucket, and its ageing manifest would turn the
+    # container healthcheck unhealthy for good although backups succeed.
+    from backuphelper.destinations.s3 import S3Destination
+    from backuphelper.healthcheck import is_healthy
+
+    data = tmp_path / "data"
+    job = _fs_job(tmp_path, destinations=[_s3_dest()])
+    monkeypatch.setattr(S3Destination, "_build_client", lambda self: _ForbiddenS3())
+    when, down = _sid(0)
+    run_job(job, data_dir=data, instance_name="i", now=when, snapshot_id=down)
+    assert (data / f"{down}.offsite-pending.json").exists()
+
+    bucket = _MemoryS3()
+    monkeypatch.setattr(S3Destination, "_build_client", lambda self: bucket)
+    when, up = _sid(24)
+    result = run_job(job, data_dir=data, instance_name="i", now=when, snapshot_id=up)
+
+    assert result.status == "success"
+    assert {f"{down}.tar.gz", f"{down}.manifest.json", f"{up}.tar.gz",
+            f"{up}.manifest.json"} == set(bucket.objects)
+    assert list(data.iterdir()) == []                        # fallback copy + marker gone
+    assert is_healthy(data, 26, now=NOW + timedelta(days=3))
+
+
+def test_keep_local_false_uploads_the_kept_copy_later_and_then_drops_it(tmp_path, monkeypatch):
+    from backuphelper.destinations.s3 import S3Destination
+
+    data = tmp_path / "data"
+    job = _fs_job(tmp_path, keep_local=False, destinations=[{"type": "local"}, _s3_dest()])
+    monkeypatch.setattr(S3Destination, "_build_client", lambda self: _ForbiddenS3())
+    result = run_job(job, data_dir=data, instance_name="i", now=NOW, snapshot_id="p1")
+    assert any("next run" in e for e in result.errors)
+    assert (data / "p1.tar.gz").exists() and (data / "p1.offsite-pending.json").exists()
+
+    bucket = _MemoryS3()
+    monkeypatch.setattr(S3Destination, "_build_client", lambda self: bucket)
+    assert run_job(job, data_dir=data, instance_name="i", now=NOW,
+                   snapshot_id="p2").status == "success"
+    assert {"p1.tar.gz", "p1.manifest.json", "p2.tar.gz", "p2.manifest.json"} == set(bucket.objects)
+    assert list(data.iterdir()) == []
+
+
+def test_keep_local_true_uploads_the_missed_snapshot_and_keeps_it_locally(tmp_path, monkeypatch):
+    from backuphelper.destinations.s3 import S3Destination
+
+    data = tmp_path / "data"
+    job = _fs_job(tmp_path, destinations=[{"type": "local"}, _s3_dest()])
+    monkeypatch.setattr(S3Destination, "_build_client", lambda self: _ForbiddenS3())
+    run_job(job, data_dir=data, instance_name="i", now=NOW, snapshot_id="q1")
+    bucket = _MemoryS3()
+    monkeypatch.setattr(S3Destination, "_build_client", lambda self: bucket)
+    run_job(job, data_dir=data, instance_name="i", now=NOW, snapshot_id="q2")
+    assert "q1.manifest.json" in bucket.objects
+    assert (data / "q1.tar.gz").exists() and not (data / "q1.offsite-pending.json").exists()
+
+
+def test_a_failed_pending_upload_keeps_the_snapshot_pending(tmp_path, monkeypatch):
+    from backuphelper.destinations.s3 import S3Destination
+
+    data = tmp_path / "data"
+    job = _fs_job(tmp_path, destinations=[_s3_dest()])
+    monkeypatch.setattr(S3Destination, "_build_client", lambda self: _ForbiddenS3())
+    run_job(job, data_dir=data, instance_name="i", now=NOW, snapshot_id="r1")
+
+    real_put = S3Destination.put
+
+    def put(self, local_path, key):
+        if key.startswith("r1."):
+            raise RuntimeError("slow down")
+        real_put(self, local_path, key)
+
+    monkeypatch.setattr(S3Destination, "_build_client", lambda self: _MemoryS3())
+    monkeypatch.setattr(S3Destination, "put", put)
+    result = run_job(job, data_dir=data, instance_name="i", now=NOW, snapshot_id="r2")
+    assert result.status == "warning"
+    assert any(e.startswith("pending snapshot r1:") for e in result.errors)
+    assert (data / "r1.tar.gz").exists() and (data / "r1.offsite-pending.json").exists()
+
+
+def test_a_snapshot_stored_nowhere_is_an_error(tmp_path, monkeypatch):
+    # The local put fails (disk full) and S3 is rejected: no copy of this run
+    # exists anywhere, so the run must not pass as a mere warning (exit 0, and
+    # no alert at notifications.level=errors).
+    from backuphelper.cli import run_all_now
+    from backuphelper.config.models import RootConfig
+    from backuphelper.destinations.local import LocalDestination
+    from backuphelper.destinations.s3 import S3Destination
+
+    def disk_full(self, local_path, key):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(S3Destination, "_build_client", lambda self: _ForbiddenS3())
+    monkeypatch.setattr(LocalDestination, "put", disk_full)
+    data = tmp_path / "data"
+    for destinations in ([{"type": "local"}, _s3_dest()], [_s3_dest()]):
+        job = Job.model_validate({"name": "main", "destinations": destinations,
+                                  "sources": [{"type": "env", "name": "env", "whitelist": []}]})
+        spy = _Spy()
+        result = run_job(job, data_dir=data, instance_name="i", notifier=spy, now=NOW,
+                         snapshot_id="n1")
+        assert result.status == "error" and result.archive is None
+        assert any("not stored on any destination" in e for e in result.errors)
+        assert spy.events[0].status == "error"
+        assert run_all_now(RootConfig(jobs=[job]), data) == 1
 
 
 def test_unconfigured_s3_destination_is_skipped_local_only(tmp_path):

@@ -18,9 +18,23 @@ Every destination implements the same contract — `put` / `get` / `list_keys` /
 - List only `local` → snapshots stay on the local data dir (the default).
 - List only `s3` → snapshots ship off-site to the bucket.
 - List **both** → the archive and its sidecar are written to each; you keep a local copy *and* an off-site copy.
-- List **both** with `"keep_local": false` → the local copy is deleted, but only after an off-site destination has actually stored *this* snapshot (archive and manifest uploaded, remote size verified). When no off-site copy exists — the S3 bucket is unset, the target is unreachable, or the upload failed — the local copy is kept and the job reports a `warning`, so the only copy is never deleted.
+- List **both** with `"keep_local": false` → the local copy is deleted, but only after an off-site destination has actually stored *this* snapshot (archive and manifest uploaded, remote size verified). When no off-site copy exists — the S3 bucket is unset, the target is unreachable, or the upload failed — the local copy is kept and the job reports a `warning`, so the only copy is never deleted; a reachable S3 target picks it up on the next run (see [Catching up after an S3 outage](#catching-up-after-an-s3-outage)).
 
-The archive and its `<snapshot-id>.manifest.json` sidecar are `put` to **every** configured destination, and retention (count / age / GFS / smart-last) is applied independently **per destination**. A failed upload to one destination degrades the job to a partial/warning state rather than aborting the others.
+The archive and its `<snapshot-id>.manifest.json` sidecar are `put` to **every** configured destination, and retention (count / age / GFS / smart-last) is applied independently **per destination**.
+
+### When a destination fails
+
+A failing destination does not abort the run, and a snapshot is only lost when no destination at all could store it:
+
+- An S3 destination that cannot be set up at the start of the upload phase — rejected credentials (`403`), unreachable endpoint, DNS error, bucket creation denied under `ensure_bucket` — is skipped for this run. An upload that fails (or fails its size check) counts the same way.
+- Either case degrades the job to `warning`. The other destinations still receive the snapshot, and the error text is in the job's alert and in the log.
+- If the snapshot reached **no** configured destination (e.g. an S3-only job whose bucket is unreachable), it is kept in the local data dir as a fallback and the alert says so. The job's retention prunes only **its own** fallback copies there — never snapshots of other jobs that share the data dir.
+- If even that fails (e.g. the data dir is full), no copy of the run exists: the job reports `error`, so `--now` exits `1` and an alert goes out even at `level: errors`.
+- The staging area under `<data_dir>/.work/` is always removed, even when a run is aborted (for example by a `pre_backup` hook).
+
+#### Catching up after an S3 outage
+
+A snapshot that should be off-site but is not — an S3-only job's fallback copy, or a job listing both `local` and `s3` whose S3 upload failed — is marked with a `<snapshot-id>.offsite-pending.json` file next to its manifest (it names the job). The next run of that job that reaches an off-site destination uploads every pending snapshot there and removes the marker. When the job keeps no local copies (S3-only, or `"keep_local": false`) the local copy goes too, so the data dir is empty again once S3 is back and the [healthcheck](deployment.md#the-functional-healthcheck) does not age on a leftover manifest. A pending upload that fails again stays pending and is retried on the following run. Retention and `prune` delete a marker together with its snapshot.
 
 ```json
 {
@@ -102,7 +116,7 @@ The client is built with **path-style addressing** (when `force_path_style` is t
 - **MinIO / Ceph RGW / Garage** — self-hosted; keep `force_path_style: true`.
 - **Cloudflare R2, Backblaze B2, Wasabi** — set `endpoint` to the provider's S3 URL and the matching `region`.
 
-When `ensure_bucket` is true, the destination checks the bucket with `head_bucket` on startup and creates it if missing (adding a `LocationConstraint` for any region other than `us-east-1`). Set `ensure_bucket: false` if the credentials are not allowed to create buckets.
+When `ensure_bucket` is true, the destination checks the bucket with `head_bucket` on startup and creates it if missing (adding a `LocationConstraint` for any region other than `us-east-1`). Set `ensure_bucket: false` if the credentials are not allowed to create buckets. If the check or the creation fails, the destination is skipped for that run (see [When a destination fails](#when-a-destination-fails)).
 
 ```bash
 # List and verify snapshots across local + remote destinations

@@ -64,6 +64,11 @@ its `created_at`, and exits `0` when that is within `BACKUP_HEALTHCHECK_MAX_AGE_
 
 - A **missing** manifest is treated as healthy (grace), so a freshly started
   daemon that has not run yet is not reported unhealthy.
+- Only snapshots **in `/data`** count. A job that ships off-site only (S3-only,
+  or `keep_local: false`) leaves no local manifest, so the probe stays in grace
+  for it — monitor such jobs through alerts. During an S3 outage the fallback
+  copies in `/data` keep it fresh; once S3 is back they are uploaded and
+  removed (see [destinations](destinations.md#catching-up-after-an-s3-outage)).
 - Tune the window per deployment, e.g. for a job that runs every 6 hours:
 
   ```yaml
