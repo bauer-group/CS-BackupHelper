@@ -103,6 +103,45 @@ def test_keep_local_false_drops_local_copy_after_s3_upload(tmp_path):
     assert list(data.glob("*.tar.gz")) == []
 
 
+def test_a_raising_source_is_recorded_in_the_manifest(tmp_path, monkeypatch):
+    # Regression: a source whose produce() RAISED (e.g. PermissionError) vanished
+    # from the manifest — no entry, no error — while a failed pg_dump (returned as
+    # an errored component) was recorded with size 0 and its error text.
+    from backuphelper.sources.filesystem import FilesystemSource
+
+    real_produce = FilesystemSource.produce
+
+    def produce(self, staging_dir):
+        if self.cfg.name != "locked":
+            return real_produce(self, staging_dir)
+        (staging_dir / "locked.tar.gz").write_bytes(b"half-written")
+        raise PermissionError(13, "Permission denied", "/srv/locked/private.txt")
+
+    monkeypatch.setattr(FilesystemSource, "produce", produce)
+    data = tmp_path / "data"
+    job = _fs_job(tmp_path)
+    job.sources.append(SourceSpec(type="filesystem", name="locked", path=str(tmp_path)))
+    result = run_job(job, data_dir=data, instance_name="i", now=NOW, snapshot_id="f1")
+
+    assert result.status == "warning"
+    comp = {c.name: c for c in read_manifest(sidecar_path(data, "f1")).components}["locked"]
+    assert comp.kind == "filesystem" and comp.size == 0 and comp.sha256 == ""
+    assert "Permission denied" in comp.error
+    assert any(e.startswith("locked:") and "Permission denied" in e for e in result.errors)
+    with tarfile.open(data / "f1.tar.gz", "r:gz") as tar:  # no half-written output shipped
+        assert "locked.tar.gz" not in tar.getnames()
+
+
+def test_a_source_that_cannot_be_built_is_recorded_in_the_manifest(tmp_path):
+    data = tmp_path / "data"
+    job = _fs_job(tmp_path)
+    job.sources.append(SourceSpec(type="nocodb", name="nocodb"))  # plugin not installed
+    result = run_job(job, data_dir=data, instance_name="i", now=NOW, snapshot_id="f2")
+    assert result.status == "warning"
+    comp = {c.name: c for c in read_manifest(sidecar_path(data, "f2")).components}["nocodb"]
+    assert comp.kind == "nocodb" and comp.size == 0 and comp.sha256 == "" and comp.error
+
+
 def _s3_dest(**over):
     spec = {"type": "s3", "bucket": "offsite", "access_key": "k", "secret_key": "s",
             "region": "eu-central-1"}
