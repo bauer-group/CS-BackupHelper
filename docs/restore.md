@@ -9,7 +9,7 @@ How to restore a BackupHelper snapshot end to end — pick it, verify it, then r
 3. **Extract** the outer bundle into a temporary work dir.
 4. **Replay each component** listed in the manifest onto its matching configured source. Components that errored during backup, or that you excluded with `--only`, are skipped. A component with no matching source config in the selected job is logged and skipped.
 
-Restore does **not** re-check the archive hash itself. The integrity gate is the separate `verify` command, which you run first (step 2 below).
+Before it decrypts anything, restore recomputes the archive's sha256 and refuses (exit `1`) when it does not match `archive_sha256` in the sidecar manifest; a manifest without that field is not checked. `verify` runs the same check without touching anything, so run it first (step 2 below) to find a bad snapshot before you stop the application.
 
 ## Step 1 — pick the snapshot
 
@@ -126,5 +126,5 @@ If the snapshot is only available off-site, first copy the archive **and** its `
 - **Validate DB restore against staging first.** The database restore paths (Postgres `pg_restore`/`psql`, MariaDB/MySQL client replay) are covered by unit tests, but have not been proven against a production-scale live database. Before relying on them for a real recovery, rehearse the full restore against a **staging** copy of the target DB and confirm the data and schema come back intact.
 - **Filesystem restore is additive.** It overwrites and adds files but never deletes stray files already on disk. For a byte-exact tree, restore into an empty/clean target path.
 - **`env` is never auto-applied.** Environment variables are captured for reference only; you must re-apply them yourself.
-- **Restore does not re-verify the hash.** Run `verify` first — a corrupt archive will otherwise be replayed straight onto live data.
+- **Restore refuses a corrupt archive.** It re-checks `archive_sha256` before decrypting and stops on a mismatch. Still run `verify` first, so a bad snapshot shows up before the application is stopped.
 - **No undo.** Databases and S3 objects are overwritten in place. Take a fresh backup (or a manual DB dump) of the current state before restoring if there is any chance the current data is still worth keeping.
