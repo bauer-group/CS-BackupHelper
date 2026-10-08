@@ -75,6 +75,8 @@ Sends a multipart text + HTML message over SMTP. STARTTLS and login are applied 
 
 The subject is `[<instance>] backup <status>: <snapshot_id>`. The body includes job, duration, size and any errors.
 
+Every value the HTML part shows — title, message, instance, job, snapshot id, status and each error text — is HTML-escaped. An error text that contains markup or `<`, `>`, `&` (a crafted file name below a filesystem source, a database or exception message) therefore appears as literal text and is never interpreted by the mail client. The plain-text part carries the same values unchanged.
+
 ```json
 { "channels": ["email"], "level": "warnings",
   "email": {

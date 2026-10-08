@@ -4,10 +4,16 @@ The SMTP class is injectable (defaulting to :class:`smtplib.SMTP`) so tests can
 substitute a recorder and assert on the built message and recipients without
 ever opening a socket. STARTTLS and authentication are applied only when the
 config asks for them.
+
+Every value interpolated into the HTML part is escaped: error texts carry run
+data (file names, database and exception messages) that must reach the
+recipient as text and never be interpreted as markup by the mail client. The
+plain-text part needs no escaping and carries the same values verbatim.
 """
 
 from __future__ import annotations
 
+import html
 import smtplib
 from email.message import EmailMessage
 from typing import Callable, ClassVar
@@ -21,6 +27,11 @@ from backuphelper.notify.base import (
 )
 
 SmtpFactory = Callable[..., smtplib.SMTP]
+
+
+def _esc(value: object) -> str:
+    """``value`` as HTML text, safe in element content and quoted attributes."""
+    return html.escape(str(value), quote=True)
 
 
 class EmailChannel(Channel):
@@ -75,16 +86,16 @@ class EmailChannel(Channel):
     def _html_body(self, event: AlertEvent) -> str:
         errors_html = ""
         if event.errors:
-            items = "".join(f"<li>{e}</li>" for e in event.errors)
+            items = "".join(f"<li>{_esc(e)}</li>" for e in event.errors)
             errors_html = f"<h3>Errors</h3><ul>{items}</ul>"
         return (
             f"<html><body>"
-            f"<h2>{event.title}</h2>"
-            f"<p>{event.message}</p>"
-            f"<p><strong>Instance:</strong> {event.instance}<br>"
-            f"<strong>Job:</strong> {event.job}<br>"
-            f"<strong>Snapshot:</strong> {event.snapshot_id}<br>"
-            f"<strong>Status:</strong> {event.status}</p>"
+            f"<h2>{_esc(event.title)}</h2>"
+            f"<p>{_esc(event.message)}</p>"
+            f"<p><strong>Instance:</strong> {_esc(event.instance)}<br>"
+            f"<strong>Job:</strong> {_esc(event.job)}<br>"
+            f"<strong>Snapshot:</strong> {_esc(event.snapshot_id)}<br>"
+            f"<strong>Status:</strong> {_esc(event.status)}</p>"
             f"{errors_html}"
             f"</body></html>"
         )
