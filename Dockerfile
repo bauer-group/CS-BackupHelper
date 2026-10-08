@@ -11,7 +11,7 @@
 #
 #  Build    : multi-stage with an integrated pytest gate — the prod image cannot
 #             be assembled unless the test stage passes (COPY --from=test).
-#  Base     : python:3.14-alpine. pg_client major pinned via PG_CLIENT_VERSION.
+#  Base     : python:4.0-alpine. pg_client major pinned via PG_CLIENT_VERSION.
 #  Runtime  : non-root `backup` user (uid/gid 1000), tini as PID 1.
 # =============================================================================
 
@@ -20,7 +20,7 @@ ARG PG_CLIENT_VERSION=18
 # ---------------------------------------------------------------------------
 # Stage 1 · builder — resolve + install the package and its deps into /install
 # ---------------------------------------------------------------------------
-FROM python:3.14-alpine AS builder
+FROM python:4.0-alpine AS builder
 RUN apk add --no-cache build-base libffi-dev
 WORKDIR /build
 COPY pyproject.toml README.md ./
@@ -30,7 +30,7 @@ RUN pip install --no-cache-dir --prefix=/install .
 # ---------------------------------------------------------------------------
 # Stage 2 · test — pytest gate (build fails if tests fail)
 # ---------------------------------------------------------------------------
-FROM python:3.14-alpine AS test
+FROM python:4.0-alpine AS test
 ARG PG_CLIENT_VERSION
 RUN apk add --no-cache build-base libffi-dev \
         "postgresql${PG_CLIENT_VERSION}-client" mariadb-client
@@ -45,7 +45,7 @@ RUN pytest tests/ -q
 # ---------------------------------------------------------------------------
 # Stage 3 · prod — minimal runtime
 # ---------------------------------------------------------------------------
-FROM python:3.14-alpine AS prod
+FROM python:4.0-alpine AS prod
 ARG PG_CLIENT_VERSION
 ARG IMAGE_VERSION=0.1.0
 
@@ -58,7 +58,7 @@ LABEL org.opencontainers.image.vendor="BAUER GROUP"
 LABEL org.opencontainers.image.authors="Karl Bauer <kb@de.bauer-group.com>"
 LABEL org.opencontainers.image.licenses="MIT"
 LABEL org.opencontainers.image.source="https://github.com/bauer-group/CS-BackupHelper"
-LABEL org.opencontainers.image.base.name="docker.io/library/python:3.14-alpine"
+LABEL org.opencontainers.image.base.name="docker.io/library/python:4.0-alpine"
 LABEL org.opencontainers.image.version="${IMAGE_VERSION}"
 
 # Runtime deps: DB clients (mariadb-client covers MariaDB 11/12 + MySQL 8/9),
