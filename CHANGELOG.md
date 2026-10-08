@@ -4,6 +4,12 @@ All notable changes to this project are documented here. This file is maintained
 automatically by [semantic-release](https://github.com/semantic-release/semantic-release)
 on every release to `main`.
 
+## [1.7.6](https://github.com/bauer-group/CS-BackupHelper/compare/v1.7.5...v1.7.6) (2026-10-08)
+
+### 🐛 Bug Fixes
+
+* **notify:** escaped run data in the HTML part of alert emails ([7e9597a](https://github.com/bauer-group/CS-BackupHelper/commit/7e9597a30475f0b8fd8652576eae4b800e998baa))
+
 ## [1.7.5](https://github.com/bauer-group/CS-BackupHelper/compare/v1.7.4...v1.7.5) (2026-10-06)
 
 ### 🐛 Bug Fixes
