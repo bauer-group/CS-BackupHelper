@@ -93,3 +93,4 @@ ENTRYPOINT ["/sbin/tini", "--", "backuphelper"]
 #   (default)  scheduler daemon
 #   --now      run every job once and exit
 #   <command>  create / list / show / verify / restore / prune / config ...
+# canary dependabot/docker/canary-dmam-fail
