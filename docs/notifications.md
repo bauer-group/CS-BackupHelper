@@ -8,6 +8,8 @@ Every job carries its own `notifications` block. After a run finishes — or abo
 2. **Fans out** to each name in `channels`, building only those channels.
 3. **Isolates faults** — a channel that raises is logged and skipped; the others still receive the alert.
 
+What each status means is listed under [run status](cli.md#run-status). Since 1.7.7 a run in which one component failed completely (a failed `pg_dump`, a raising plugin or S3 source, a missing path) is an `error`, so it is delivered at every `level`; up to 1.7.6 it was a `warning` as long as another component succeeded.
+
 See the [configuration](configuration.md) reference for how the `notifications` block sits inside a job.
 
 ## The `notifications` block
@@ -169,7 +171,7 @@ POSTs the event message as a plain-text body to `url` (with `topic` appended whe
 
 ### Healthchecks (dead-man's switch)
 
-Pings a Healthchecks.io-style monitoring check. A `success` or `warning` outcome pings the base check URL (the switch stays alive); an `error` pings the `<url>/fail` endpoint so the monitor flips the check red. The event message is sent as the request body so it appears in the check's log.
+Pings a Healthchecks.io-style monitoring check. A `success` or `warning` outcome pings the base check URL (the switch stays alive); an `error` — including a run with a failed component — pings the `<url>/fail` endpoint so the monitor flips the check red. The event message is sent as the request body so it appears in the check's log.
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |

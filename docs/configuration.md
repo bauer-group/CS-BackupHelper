@@ -123,6 +123,8 @@ A container runs **N jobs**; the common case is one. A single job may list sever
 | `on_startup` | `false` | Also run once immediately on container start |
 | `hour` / `minute` / `day_of_week` | `null` | Field-based alternative to a raw cron string |
 
+The container healthcheck expects a run at least every `BACKUP_HEALTHCHECK_MAX_AGE_HOURS` (default `26`). For schedules with longer gaps — e.g. weekly — raise it, see [deployment](deployment.md#choosing-backup_healthcheck_max_age_hours).
+
 ### Retention
 
 | Field | Default | Description |
