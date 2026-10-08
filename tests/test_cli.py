@@ -41,6 +41,39 @@ def test_create_then_list_then_verify(tmp_path):
     assert verified.exit_code == 0 and verified.stdout.startswith("OK")
 
 
+def _with_job(env, **job_over):
+    cfg = json.loads(env["BACKUP_CONFIG_JSON"])
+    cfg["jobs"][0].update(job_over)
+    return {**env, "BACKUP_CONFIG_JSON": json.dumps(cfg)}
+
+
+def test_create_and_now_exit_non_zero_when_a_component_fails(tmp_path):
+    # Regression: one failed source (here a missing path) next to a good one
+    # exited 0, so cron wrappers and CI took a snapshot without that data as fine.
+    env = _env(tmp_path)
+    cfg = json.loads(env["BACKUP_CONFIG_JSON"])
+    sources = cfg["jobs"][0]["sources"] + [
+        {"type": "filesystem", "name": "missing", "path": str(tmp_path / "nope")}]
+    env = _with_job(env, sources=sources)
+
+    assert runner.invoke(app, ["create"], env=env).exit_code == 1
+    assert runner.invoke(app, ["--now"], env=env).exit_code == 1
+
+    # the partial snapshot is kept and `show` names its status
+    sid = runner.invoke(app, ["list"], env=env).stdout.split()[0]
+    shown = json.loads(runner.invoke(app, ["show", sid], env=env).stdout)
+    assert shown["status"] == "error"
+    assert [c["name"] for c in shown["components"] if c["error"]] == ["missing"]
+
+
+def test_create_exits_zero_on_a_warning(tmp_path):
+    # keep_local=false without a configured S3 bucket keeps the local copy and
+    # warns - a genuine warning, not a failure.
+    env = _with_job(_env(tmp_path), keep_local=False,
+                    destinations=[{"type": "local"}, {"type": "s3", "bucket": ""}])
+    assert runner.invoke(app, ["create"], env=env).exit_code == 0
+
+
 def test_config_print_redacted_masks_secrets(tmp_path):
     env = _env(tmp_path)
     env["BACKUP_CONFIG_JSON"] = json.dumps({

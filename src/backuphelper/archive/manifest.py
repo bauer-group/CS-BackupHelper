@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -29,6 +29,21 @@ class Component(BaseModel):
     metadata: dict = Field(default_factory=dict)
 
 
+def snapshot_status(components: Iterable[Component]) -> str:
+    """How complete a snapshot's content is: ``error`` when a component failed
+    (it holds no data), ``warning`` when a component reported non-fatal
+    ``metadata["warnings"]`` (incomplete but restorable), else ``success``.
+
+    Destination, encryption and retention problems are not part of it: they are
+    known only after the manifest is written and live in the job status."""
+    components = list(components)
+    if any(c.error for c in components):
+        return "error"
+    if any(c.metadata.get("warnings") for c in components):
+        return "warning"
+    return "success"
+
+
 class Manifest(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -36,6 +51,8 @@ class Manifest(BaseModel):
     snapshot_id: str
     instance_name: str
     created_at: str
+    # snapshot_status() of the components; None in manifests written before 1.7.7.
+    status: Optional[str] = None
     total_bytes: int = 0
     archive_sha256: Optional[str] = None
     components: list[Component] = Field(default_factory=list)
@@ -51,6 +68,8 @@ class Manifest(BaseModel):
         archive_sha256: Optional[str] = None,
         **extra: object,
     ) -> "Manifest":
+        components = list(components)
+        extra.setdefault("status", snapshot_status(components))
         return cls(
             snapshot_id=snapshot_id,
             instance_name=instance_name,

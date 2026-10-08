@@ -7,6 +7,7 @@ from backuphelper.archive.manifest import (
     Manifest,
     read_manifest,
     sidecar_path,
+    snapshot_status,
     write_manifest,
 )
 
@@ -53,3 +54,31 @@ def test_written_manifest_is_indented_json(tmp_path):
 
 def test_sidecar_path_naming(tmp_path):
     assert sidecar_path(tmp_path, "2026-07-06_03-00-00") == tmp_path / "2026-07-06_03-00-00.manifest.json"
+
+
+def _comp(name, error=None, warnings=None):
+    return Component(name=name, kind="filesystem", size=0 if error else 1, sha256="x",
+                     error=error, metadata={"warnings": warnings} if warnings else {})
+
+
+def test_snapshot_status_reflects_the_components():
+    assert snapshot_status([_comp("a"), _comp("b")]) == "success"
+    warned = _comp("b", warnings=["c.txt (unreadable)"])
+    assert snapshot_status([_comp("a"), warned]) == "warning"
+    failed = _comp("db", error="pg_dump failed")
+    assert snapshot_status([_comp("a", warnings=["w"]), failed]) == "error"
+    assert snapshot_status([]) == "success"
+
+
+def test_build_records_the_snapshot_status(tmp_path):
+    m = Manifest.build(snapshot_id="s", instance_name="i", created_at="2026-07-06T03:00:00Z",
+                       components=[_comp("a"), _comp("db", error="pg_dump failed")])
+    write_manifest(m, tmp_path / "s.manifest.json")
+    assert json.loads((tmp_path / "s.manifest.json").read_text())["status"] == "error"
+
+
+def test_a_manifest_written_before_the_status_field_still_reads(tmp_path):
+    p = tmp_path / "old.manifest.json"
+    p.write_text(json.dumps({"schema_version": 1, "snapshot_id": "old", "instance_name": "i",
+                             "created_at": "2026-07-06T03:00:00Z", "components": []}))
+    assert read_manifest(p).status is None

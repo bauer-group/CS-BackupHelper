@@ -59,6 +59,33 @@ class JobResult:
     errors: list[str] = field(default_factory=list)
 
 
+def job_status(components: list[Component], errors: list[str], *, stored: bool) -> str:
+    """The outcome of one run (docs/cli.md#run-status):
+
+    * ``error``   — the snapshot was stored nowhere, or a component failed
+      completely (a failed pg_dump, a raising plugin or S3 source, a missing
+      path): the snapshot lacks that data, so the run must not pass;
+    * ``warning`` — everything was backed up, but something non-fatal went
+      wrong (a source skipped unreadable files, an S3 destination failed while
+      another copy exists, encryption fell back to plaintext, retention failed);
+    * ``success`` — nothing to report.
+
+    Disabled and unconfigured sources produce no component and do not count."""
+    if not stored or any(c.error for c in components):
+        return "error"
+    return "warning" if errors else "success"
+
+
+def _outcome(status: str, components: list[Component], stored: bool) -> str:
+    """The alert message: one fixed text per outcome, never run data (the
+    details are in the event's errors)."""
+    if not stored:
+        return "snapshot was not stored on any destination"
+    if any(c.error for c in components):
+        return "snapshot is incomplete - a component failed"
+    return "snapshot completed with warnings" if status == "warning" else "snapshot completed"
+
+
 def run_job(
     job: Job,
     *,
@@ -84,7 +111,6 @@ def run_job(
             hooks.run("pre_backup", {"job": job.name, "snapshot_id": sid})
 
         components = _produce(job, staging, errors)
-        ok = [c for c in components if not c.error]
 
         embedded = Manifest.build(snapshot_id=sid, instance_name=instance_name,
                                   components=components, created_at=now.isoformat())
@@ -134,8 +160,8 @@ def run_job(
         except OSError:
             pass
 
-    # A run that left no copy anywhere is an error, whatever the sources did.
-    status = "success" if not errors else ("warning" if ok and delivery.stored else "error")
+    stored_anywhere = bool(delivery.stored)
+    status = job_status(components, errors, stored=stored_anywhere)
     stored_path = data_dir / artifact.name
     stored = stored_path if stored_path.exists() else None
     result = JobResult(status=status, snapshot_id=sid, archive=stored,
@@ -143,7 +169,8 @@ def run_job(
 
     if notifier:
         notifier.notify(_event(job, instance_name, sid, status, manifest.total_bytes, errors,
-                               started, now))
+                               started, now,
+                               message=_outcome(status, components, stored_anywhere)))
     if hooks:
         hooks.run("post_backup", {"job": job.name, "snapshot_id": sid, "status": status})
     log.info("job %s snapshot %s finished: %s", job.name, sid, status)
@@ -362,8 +389,10 @@ def _produce(job: Job, staging: Path, errors: list[str]) -> list[Component]:
             continue
         for sc in staged:
             if sc.error or not sc.path:
-                error = redact(sc.error) if sc.error else None
-                errors.append(f"{sc.name}: {error or 'no output'}")
+                # No file is a failure even without an error text: the component
+                # holds no data, so it must not pass as a good (restorable) one.
+                error = redact(sc.error) if sc.error else "no output"
+                errors.append(f"{sc.name}: {error}")
                 components.append(Component(name=sc.name, kind=sc.kind, size=0, sha256="",
                                             error=error, metadata=sc.metadata))
             else:
@@ -607,9 +636,7 @@ def parse_snapshot_timestamp(sid: str, fallback: datetime) -> datetime:
 
 def _event(job: Job, instance: str, sid: str, status: str, total_bytes: int,
            errors: list[str], started: datetime, finished: datetime,
-           message: Optional[str] = None) -> AlertEvent:
-    if message is None:
-        message = "snapshot completed" if status == "success" else "snapshot completed with errors"
+           message: str) -> AlertEvent:
     return AlertEvent(
         status=status, title=f"backup {status}", message=message, instance=instance,
         snapshot_id=sid, job=job.name, total_bytes=total_bytes,
