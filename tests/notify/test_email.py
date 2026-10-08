@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+from html.parser import HTMLParser
+
 import pytest
 
 from backuphelper.config.models import EmailChannelConfig
@@ -168,3 +171,89 @@ def test_email_with_only_empty_recipients_is_not_configured_and_never_connects()
     with pytest.raises(ChannelNotConfigured):
         EmailChannel(_cfg(recipients=[""]), smtp_factory=_factory(created)).send(_event())
     assert created == []  # no SMTP session, so no RCPT with an empty address
+
+
+# ------------------------------------------------------------ HTML escaping ---
+
+# Markup an error text can carry in practice: a crafted file name below a
+# filesystem source, a database error quoting its input, an exception repr.
+# It holds a script, an element with an event-handler attribute, a character
+# reference and both quote characters.
+MARKUP = "<script>alert(1)</script><img src=x onerror=\"alert(2)\">&copy; 'q'"
+
+
+class _HtmlProbe(HTMLParser):
+    """Reads an HTML body like a renderer: the elements it would build (start
+    tags) and the decoded text a recipient sees."""
+
+    def __init__(self, html: str):
+        super().__init__(convert_charrefs=True)
+        self.tags: list[str] = []
+        self._text: list[str] = []
+        self.feed(html)
+        self.close()
+
+    def handle_starttag(self, tag, attrs):
+        self.tags.append(tag)
+
+    def handle_data(self, data):
+        self._text.append(data)
+
+    @property
+    def text(self) -> str:
+        return "".join(self._text)
+
+
+def _sent(event):
+    created: list = []
+    EmailChannel(_cfg(), smtp_factory=_factory(created)).send(event)
+    return created[0].sent_messages[0]
+
+
+def _html_part(event) -> str:
+    return _sent(event).get_body(preferencelist=("html",)).get_content()
+
+
+def _text_part(event) -> str:
+    return _sent(event).get_body(preferencelist=("plain",)).get_content()
+
+
+def test_email_html_shows_markup_in_error_texts_as_text():
+    error = f"files: incomplete, skipped: /data/uploads/{MARKUP}.jpg"
+    event = replace(_event(), errors=[error, "db: pg_dump exited 1"])
+
+    probe = _HtmlProbe(_html_part(event))
+
+    assert "script" not in probe.tags
+    assert "img" not in probe.tags
+    assert probe.tags.count("li") == 2  # one item per error, none injected
+    assert error in probe.text  # the recipient reads the error verbatim
+
+
+def test_email_html_markup_in_errors_does_not_change_the_document_structure():
+    plain = replace(_event(), errors=["first error", "second error"])
+    crafted = replace(_event(), errors=["</li></ul><h1>forged</h1><ul><li>", MARKUP])
+
+    assert _HtmlProbe(_html_part(crafted)).tags == _HtmlProbe(_html_part(plain)).tags
+
+
+@pytest.mark.parametrize(
+    "field", ["title", "message", "instance", "job", "snapshot_id", "status"]
+)
+def test_email_html_escapes_every_interpolated_field(field):
+    event = replace(_event(), **{field: MARKUP})
+
+    probe = _HtmlProbe(_html_part(event))
+
+    assert "script" not in probe.tags
+    assert "img" not in probe.tags
+    assert MARKUP in probe.text
+
+
+def test_email_text_part_keeps_error_texts_verbatim():
+    event = replace(_event(), errors=[MARKUP])
+
+    text = _text_part(event)
+
+    assert f"  - {MARKUP}" in text
+    assert "&lt;" not in text and "&amp;" not in text
