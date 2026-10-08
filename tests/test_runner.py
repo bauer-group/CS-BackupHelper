@@ -5,6 +5,8 @@ import shutil
 import tarfile
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from backuphelper.archive.manifest import read_manifest, sidecar_path
 from backuphelper.config.models import Job, SourceSpec
 from backuphelper.runner import restore_snapshot, run_job
@@ -63,7 +65,10 @@ def test_embedded_manifest_is_inside_the_archive(tmp_path):
         assert "manifest.json" in tar.getnames()
 
 
-def test_a_failing_source_yields_partial_warning(tmp_path):
+def test_a_failing_source_makes_the_run_an_error(tmp_path):
+    # Regression: a source that failed completely only degraded the run to a
+    # warning while another source succeeded - exit 0, a warning alert and a
+    # snapshot that silently lacks the source's data.
     data = tmp_path / "data"
     job = _fs_job(tmp_path)
     job.sources.append(
@@ -71,9 +76,151 @@ def test_a_failing_source_yields_partial_warning(tmp_path):
     )
     spy = _Spy()
     result = run_job(job, data_dir=data, instance_name="iam", notifier=spy, now=NOW, snapshot_id="s3")
-    assert result.status == "warning"
+    assert result.status == "error"
     assert any("missing" in e for e in result.errors)
+    assert spy.events[0].status == "error"
+    assert spy.events[0].message == "snapshot is incomplete - a component failed"
+    # the partial snapshot is still stored, and its manifest says what it is
+    assert result.archive == data / "s3.tar.gz"
+    assert read_manifest(sidecar_path(data, "s3")).status == "error"
+
+
+class _FailingPgDump:
+    """subprocess.run stand-in: pg_dump exits 1 like an unreachable server."""
+
+    def __call__(self, argv, **_kwargs):
+        import subprocess
+
+        return subprocess.CompletedProcess(argv, 1, stdout=b"",
+                                           stderr=b"connection to server failed")
+
+
+class _RaisingPluginSource:
+    """A consumer plugin source whose backend raises."""
+
+    type = "fakeplugin"
+
+    def __init__(self, spec):
+        self.spec = dict(spec)
+
+    @property
+    def component_name(self):
+        return self.spec.get("name") or self.type
+
+    def produce(self, staging_dir):
+        raise RuntimeError("plugin backend answered 500")
+
+
+class _ForbiddenBucketClient:
+    def get_paginator(self, _name):
+        from botocore.exceptions import ClientError
+
+        raise ClientError({"Error": {"Code": "403", "Message": "Forbidden"}}, "ListObjectsV2")
+
+
+def _break_component(kind, monkeypatch):
+    """Make one realistic source fail completely; return its source spec."""
+    if kind == "postgres":  # a returned error: pg_dump exits non-zero
+        from backuphelper.sources.postgres import PostgresSource
+
+        real_init = PostgresSource.__init__
+
+        def init(self, spec, run=None):
+            real_init(self, spec, run=_FailingPgDump())
+
+        monkeypatch.setattr(PostgresSource, "__init__", init)
+        return SourceSpec(type="postgres", name="database", host="db", database="app")
+    if kind == "plugin":  # a raised error: the plugin's backend fails
+        from backuphelper.plugins import registry
+
+        monkeypatch.setitem(registry.BUILTIN_SOURCES, "fakeplugin", _RaisingPluginSource)
+        return SourceSpec(type="fakeplugin", name="app-export")
+    # an S3 source whose bucket rejects the credentials
+    from backuphelper.sources.s3_bucket import S3BucketSource
+
+    monkeypatch.setattr(S3BucketSource, "_build_client", lambda self: _ForbiddenBucketClient())
+    return SourceSpec(type="s3", name="attachments", bucket="attachments")
+
+
+@pytest.mark.parametrize("kind", ["postgres", "plugin", "s3"])
+def test_a_completely_failed_component_fails_the_run(tmp_path, monkeypatch, kind):
+    # A snapshot without its database must not look healthy: exit code 1, an
+    # error alert and status "error" in the manifest - although the filesystem
+    # and env components were backed up and the snapshot was stored.
+    from backuphelper.cli import run_all_now
+    from backuphelper.config.models import RootConfig
+
+    data = tmp_path / "data"
+    job = _fs_job(tmp_path)
+    job.sources.append(_break_component(kind, monkeypatch))
+    spy = _Spy()
+    result = run_job(job, data_dir=data, instance_name="i", notifier=spy, now=NOW,
+                     snapshot_id="e1")
+    assert result.status == "error"
+    assert [e.status for e in spy.events] == ["error"]
+    manifest = read_manifest(sidecar_path(data, "e1"))
+    assert manifest.status == "error"
+    failed = [c for c in manifest.components if c.error]
+    assert len(failed) == 1 and failed[0].size == 0
+    assert {c.name for c in manifest.components if not c.error} == {"uploads", "env"}
+    assert run_all_now(RootConfig(jobs=[job]), data) == 1
+
+
+def test_a_component_without_output_is_a_failed_component(tmp_path, monkeypatch):
+    # A source that returns a component with neither a file nor an error text
+    # produced nothing: it was recorded with error=None, so restore and every
+    # "error-free?" check treated the empty component as good.
+    from backuphelper.sources.base import StagedComponent
+    from backuphelper.sources.filesystem import FilesystemSource
+
+    real_produce = FilesystemSource.produce
+
+    def produce(self, staging_dir):
+        if self.cfg.name != "empty":
+            return real_produce(self, staging_dir)
+        return [StagedComponent(name="empty", kind="filesystem", path=None)]
+
+    monkeypatch.setattr(FilesystemSource, "produce", produce)
+    data = tmp_path / "data"
+    job = _fs_job(tmp_path)
+    job.sources.append(SourceSpec(type="filesystem", name="empty", path=str(tmp_path)))
+    result = run_job(job, data_dir=data, instance_name="i", now=NOW, snapshot_id="e2")
+    assert result.status == "error"
+    comp = {c.name: c for c in read_manifest(sidecar_path(data, "e2")).components}["empty"]
+    assert comp.error == "no output"
+    assert "empty: no output" in result.errors
+
+
+def test_source_warnings_keep_the_run_a_warning(tmp_path, monkeypatch):
+    # Non-fatal source warnings (skipped files) are not a failed component.
+    from backuphelper.sources.base import StagedComponent
+    from backuphelper.sources.filesystem import FilesystemSource
+
+    real_produce = FilesystemSource.produce
+
+    def produce(self, staging_dir):
+        [staged] = real_produce(self, staging_dir)
+        return [StagedComponent(name=staged.name, kind=staged.kind, path=staged.path,
+                                metadata={**staged.metadata, "warnings": ["x.txt (unreadable)"]})]
+
+    monkeypatch.setattr(FilesystemSource, "produce", produce)
+    data = tmp_path / "data"
+    spy = _Spy()
+    result = run_job(_fs_job(tmp_path), data_dir=data, instance_name="i", notifier=spy,
+                     now=NOW, snapshot_id="w1")
+    assert result.status == "warning"
     assert spy.events[0].status == "warning"
+    assert spy.events[0].message == "snapshot completed with warnings"
+    assert read_manifest(sidecar_path(data, "w1")).status == "warning"
+
+
+def test_a_successful_snapshot_records_success_in_its_manifest(tmp_path):
+    data = tmp_path / "data"
+    run_job(_fs_job(tmp_path), data_dir=data, instance_name="i", now=NOW, snapshot_id="ok1")
+    assert read_manifest(sidecar_path(data, "ok1")).status == "success"
+    with tarfile.open(data / "ok1.tar.gz", "r:gz") as tar:  # the embedded copy agrees
+        embedded = json.loads(tar.extractfile("manifest.json").read())
+    assert embedded["status"] == "success"
 
 
 def test_failed_encryption_warns_that_the_snapshot_is_unencrypted(tmp_path, monkeypatch, caplog):
@@ -148,7 +295,7 @@ def test_a_raising_source_is_recorded_in_the_manifest(tmp_path, monkeypatch):
     job.sources.append(SourceSpec(type="filesystem", name="locked", path=str(tmp_path)))
     result = run_job(job, data_dir=data, instance_name="i", now=NOW, snapshot_id="f1")
 
-    assert result.status == "warning"
+    assert result.status == "error"
     comp = {c.name: c for c in read_manifest(sidecar_path(data, "f1")).components}["locked"]
     assert comp.kind == "filesystem" and comp.size == 0 and comp.sha256 == ""
     assert "Permission denied" in comp.error
@@ -162,7 +309,7 @@ def test_a_source_that_cannot_be_built_is_recorded_in_the_manifest(tmp_path):
     job = _fs_job(tmp_path)
     job.sources.append(SourceSpec(type="nocodb", name="nocodb"))  # plugin not installed
     result = run_job(job, data_dir=data, instance_name="i", now=NOW, snapshot_id="f2")
-    assert result.status == "warning"
+    assert result.status == "error"
     comp = {c.name: c for c in read_manifest(sidecar_path(data, "f2")).components}["nocodb"]
     assert comp.kind == "nocodb" and comp.size == 0 and comp.sha256 == "" and comp.error
 
@@ -195,6 +342,7 @@ def test_an_unreadable_subdirectory_keeps_the_readable_rest_and_warns(tmp_path, 
     assert comp.error is None and comp.size > 0 and len(comp.sha256) == 64
     assert comp.metadata["file_count"] == 1
     assert comp.metadata["warnings"] == ["locked/ (directory not readable: Permission denied)"]
+    assert read_manifest(sidecar_path(data, "f4")).status == "warning"
     monkeypatch.setattr(os, "scandir", real_scandir)
     (tmp_path / "uploads" / "a.txt").unlink()
     assert restore_snapshot(job, data_dir=data, snapshot_id="f4", only=["uploads"])
@@ -217,7 +365,7 @@ def test_an_unreadable_root_is_recorded_as_a_failed_component(tmp_path, monkeypa
     job = _fs_job(tmp_path)
     monkeypatch.setattr(os, "scandir", scandir)
     result = run_job(job, data_dir=data, instance_name="i", now=NOW, snapshot_id="f3")
-    assert result.status == "warning"
+    assert result.status == "error"
     comp = {c.name: c for c in read_manifest(sidecar_path(data, "f3")).components}["uploads"]
     assert comp.size == 0 and comp.sha256 == ""
     assert comp.error.startswith("PermissionError:") and "uploads" in comp.error
@@ -639,8 +787,11 @@ def test_disabled_source_is_skipped(tmp_path):
     (other / "x.txt").write_text("X")
     job = _fs_job(tmp_path)
     job.sources.append(SourceSpec(type="filesystem", name="other", path=str(other), enabled=False))
+    # a disabled source is not a component: had it run, its missing path would fail it
+    job.sources.append(SourceSpec(type="filesystem", name="gone", path=str(tmp_path / "nope"),
+                                  enabled=False))
     result = run_job(job, data_dir=data, instance_name="i", now=NOW, snapshot_id="d1")
-    assert result.status == "success"
+    assert result.status == "success" and result.errors == []
     m = read_manifest(sidecar_path(data, "d1"))
     assert "other" not in {c.name for c in m.components}
     assert "uploads" in {c.name for c in m.components}  # enabled sources still run
