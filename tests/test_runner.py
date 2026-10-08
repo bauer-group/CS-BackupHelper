@@ -543,6 +543,91 @@ def test_an_aborted_run_still_sends_an_error_alert(tmp_path):
     assert event.errors == ["run aborted: RuntimeError: app refused to quiesce"]
 
 
+def _refusing_hooks():
+    from backuphelper.plugins.hooks import HookRegistry
+
+    def refuse(_ctx):
+        raise RuntimeError("app refused to quiesce")
+
+    hooks = HookRegistry()
+    hooks.register("pre_backup", refuse)
+    return hooks
+
+
+def test_an_aborted_run_turns_the_healthcheck_unhealthy(tmp_path):
+    # Regression: a run that aborts before it writes a manifest left the
+    # previous good snapshot as "the last backup" - healthy for another day.
+    from backuphelper.healthcheck import is_healthy
+
+    data = tmp_path / "data"
+    job = _fs_job(tmp_path)
+    run_job(job, data_dir=data, instance_name="i", now=NOW, snapshot_id="a1")
+    assert is_healthy(data, 26, now=NOW + timedelta(hours=1))
+    with pytest.raises(RuntimeError, match="quiesce"):
+        run_job(job, data_dir=data, instance_name="i", now=NOW + timedelta(hours=1),
+                snapshot_id="a2", hooks=_refusing_hooks())
+    assert not is_healthy(data, 26, now=NOW + timedelta(hours=2))
+
+
+def test_a_run_with_a_failed_component_turns_the_healthcheck_unhealthy(tmp_path):
+    # Regression: the fresh snapshot without its failed component kept the
+    # container healthy. A newer complete snapshot turns it healthy again.
+    from backuphelper.healthcheck import is_healthy
+
+    data = tmp_path / "data"
+    good = _fs_job(tmp_path)
+    broken = good.model_copy(deep=True)
+    broken.sources.append(SourceSpec(type="filesystem", name="missing",
+                                     path=str(tmp_path / "nope")))
+    run_job(broken, data_dir=data, instance_name="i", now=NOW, snapshot_id="h1")
+    assert not is_healthy(data, 26, now=NOW + timedelta(hours=1))
+    run_job(good, data_dir=data, instance_name="i", now=NOW + timedelta(hours=2),
+            snapshot_id="h2")
+    assert is_healthy(data, 26, now=NOW + timedelta(hours=3))
+
+
+def test_keep_local_false_keeps_staleness_detectable(tmp_path, monkeypatch):
+    # Regression: keep_local=false leaves no local manifest, so the probe sat in
+    # its grace for good and never noticed that backups had stopped.
+    from backuphelper.destinations.s3 import S3Destination
+    from backuphelper.healthcheck import is_healthy
+
+    monkeypatch.setattr(S3Destination, "_build_client", lambda self: _MemoryS3())
+    data = tmp_path / "data"
+    job = _fs_job(tmp_path, keep_local=False, destinations=[{"type": "local"}, _s3_dest()])
+    result = run_job(job, data_dir=data, instance_name="i", now=NOW, snapshot_id="k5")
+    assert result.status == "success"
+    assert not list(data.glob("*.manifest.json"))  # nothing local left
+    assert is_healthy(data, 26, now=NOW + timedelta(hours=1))
+    assert not is_healthy(data, 26, now=NOW + timedelta(hours=27))
+
+
+def test_every_run_leaves_a_record_for_the_healthcheck(tmp_path):
+    data = tmp_path / "data"
+    job = _fs_job(tmp_path)
+    job.sources.append(SourceSpec(type="filesystem", name="missing", path=str(tmp_path / "nope")))
+    run_job(job, data_dir=data, instance_name="i", now=NOW, snapshot_id="r9")
+    record = json.loads((data / ".state" / "job-main.json").read_text())
+    assert record == {"version": 1, "job": "main", "snapshot_id": "r9", "status": "error",
+                      "started_at": NOW.isoformat(), "failed_components": ["missing"]}
+
+
+def test_a_failing_run_record_never_fails_the_run(tmp_path, monkeypatch, caplog):
+    import backuphelper.runner as runner_module
+
+    def disk_full(*_args, **_kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(runner_module, "record_run", disk_full)
+    data = tmp_path / "data"
+    spy = _Spy()
+    with caplog.at_level("ERROR", logger="backuphelper.runner"):
+        result = run_job(_fs_job(tmp_path), data_dir=data, instance_name="i", notifier=spy,
+                         now=NOW, snapshot_id="r10")
+    assert result.status == "success" and spy.events[0].status == "success"
+    assert "could not record the outcome of job main" in caplog.text
+
+
 class _MemoryS3:
     """boto3 stand-in for a reachable bucket that keeps its objects in memory."""
 
@@ -622,8 +707,8 @@ def test_pending_snapshot_is_uploaded_once_s3_is_back(tmp_path, monkeypatch):
     assert result.status == "success"
     assert {f"{down}.tar.gz", f"{down}.manifest.json", f"{up}.tar.gz",
             f"{up}.manifest.json"} == set(bucket.objects)
-    assert list(data.iterdir()) == []                        # fallback copy + marker gone
-    assert is_healthy(data, 26, now=NOW + timedelta(days=3))
+    assert [p.name for p in data.iterdir()] == [".state"]  # fallback copy + marker gone
+    assert is_healthy(data, 26, now=NOW + timedelta(hours=25))  # fresh from the 'up' run
 
 
 def test_keep_local_false_uploads_the_kept_copy_later_and_then_drops_it(tmp_path, monkeypatch):
@@ -641,7 +726,7 @@ def test_keep_local_false_uploads_the_kept_copy_later_and_then_drops_it(tmp_path
     assert run_job(job, data_dir=data, instance_name="i", now=NOW,
                    snapshot_id="p2").status == "success"
     assert {"p1.tar.gz", "p1.manifest.json", "p2.tar.gz", "p2.manifest.json"} == set(bucket.objects)
-    assert list(data.iterdir()) == []
+    assert [p.name for p in data.iterdir()] == [".state"]  # only the run record is left
 
 
 def test_keep_local_true_uploads_the_missed_snapshot_and_keeps_it_locally(tmp_path, monkeypatch):
@@ -801,7 +886,7 @@ def test_run_leaves_no_work_artifacts_in_data_dir(tmp_path):
     data = tmp_path / "data"
     run_job(_fs_job(tmp_path), data_dir=data, instance_name="i", now=NOW, snapshot_id="s9")
     top = sorted(p.name for p in data.iterdir())
-    assert top == ["s9.manifest.json", "s9.tar.gz"]  # no leftover .work dir
+    assert top == [".state", "s9.manifest.json", "s9.tar.gz"]  # no leftover .work dir
 
 
 def test_restore_roundtrip_filesystem(tmp_path):

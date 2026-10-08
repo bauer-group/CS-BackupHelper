@@ -145,8 +145,45 @@ def test_config_show_secrets_reveals(tmp_path):
     assert "hunter2" in out.stdout
 
 
-def test_healthcheck_grace_when_no_backup(tmp_path):
-    env = {"BACKUP_DATA_DIR": str(tmp_path / "empty")}
+def test_healthcheck_on_a_freshly_started_daemon_is_healthy(tmp_path, monkeypatch):
+    # `docker compose up --wait` on a fresh stack relies on this: no backup has
+    # run yet, but the daemon recorded its start, which opens the grace.
+    from apscheduler.schedulers.blocking import BlockingScheduler
+
+    import backuphelper.scheduler as scheduler
+    from backuphelper.cli import run_daemon
+    from backuphelper.config.loader import load_config
+
+    env = _env(tmp_path)
+    monkeypatch.setattr(BlockingScheduler, "start", lambda self: None)  # return at once
+    monkeypatch.setattr(scheduler, "install_signal_drain", lambda sched: None)
+    run_daemon(load_config(env), tmp_path / "data")
+    out = runner.invoke(app, ["healthcheck"], env=env)
+    assert out.exit_code == 0
+    assert out.stdout.startswith("healthy: no backup has run yet")
+
+
+def test_healthcheck_without_a_backup_or_a_daemon_start_is_unhealthy(tmp_path):
+    (tmp_path / "empty").mkdir()
+    out = runner.invoke(app, ["healthcheck"], env={"BACKUP_DATA_DIR": str(tmp_path / "empty")})
+    assert out.exit_code == 1 and out.stdout.startswith("unhealthy:")
+
+
+def test_healthcheck_reports_a_last_run_with_a_failed_component(tmp_path):
+    import time
+
+    env = _env(tmp_path)
+    cfg = json.loads(env["BACKUP_CONFIG_JSON"])
+    good_sources = cfg["jobs"][0]["sources"]
+    broken = _with_job(env, sources=good_sources + [
+        {"type": "filesystem", "name": "missing", "path": str(tmp_path / "nope")}])
+    assert runner.invoke(app, ["create"], env=broken).exit_code == 1
+    out = runner.invoke(app, ["healthcheck"], env=env)
+    assert out.exit_code == 1
+    assert "the last backup failed" in out.stdout and "missing" in out.stdout
+
+    time.sleep(1.1)  # the next snapshot gets a new id (ids have one-second resolution)
+    assert runner.invoke(app, ["create"], env=env).exit_code == 0
     assert runner.invoke(app, ["healthcheck"], env=env).exit_code == 0
 
 

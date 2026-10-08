@@ -18,7 +18,7 @@ import typer
 
 from .config.loader import load_config
 from .config.models import Job, RootConfig
-from .healthcheck import is_healthy
+from .healthcheck import check as check_health
 from .integrity.hashing import sha256_file
 from .logging_setup import redact_data, setup_logging
 from .notify.manager import AlertManager
@@ -31,6 +31,7 @@ from .runner import (
     restore_snapshot,
     run_job,
 )
+from .state import record_daemon_start
 
 app = typer.Typer(add_completion=False, help="BAUER GROUP central backup engine")
 log = logging.getLogger(__name__)
@@ -85,6 +86,10 @@ def run_daemon(cfg: RootConfig, dd: Path) -> None:
 
     from .scheduler import build_trigger, install_signal_drain
 
+    try:  # starts the healthcheck's grace for "no backup yet" - before any job runs
+        record_daemon_start(dd)
+    except OSError as exc:  # the healthcheck reports an unwritable data dir itself
+        log.error("could not record the daemon start in %s: %s", dd, exc)
     tz = os.environ.get("TZ", "Etc/UTC")
     sched = BlockingScheduler(timezone=tz)
     for job in cfg.jobs:
@@ -263,9 +268,12 @@ def config_cmd(action: str = typer.Argument("print"),
 
 @app.command()
 def healthcheck() -> None:
-    """Exit 0 if the last backup is fresh, 1 otherwise."""
+    """Exit 0 if backups work (last run fresh and without failed components, or
+    a fresh daemon still in its grace), 1 otherwise; prints the reason."""
     max_age = float(os.environ.get("BACKUP_HEALTHCHECK_MAX_AGE_HOURS", "26"))
-    raise typer.Exit(0 if is_healthy(data_dir(), max_age) else 1)
+    health = check_health(data_dir(), max_age)
+    typer.echo(f"{'healthy' if health.healthy else 'unhealthy'}: {health.reason}")
+    raise typer.Exit(0 if health.healthy else 1)
 
 
 # Mount any app-specific subcommand groups a consuming repo registered under the

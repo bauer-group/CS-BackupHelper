@@ -38,6 +38,7 @@ from .plugins.registry import build_source
 from .sources.base import StagedComponent
 from .retention import Snapshot
 from .retention import manager as retention_manager
+from .state import RunRecord, record_run
 
 log = logging.getLogger(__name__)
 
@@ -105,6 +106,7 @@ def run_job(
     staging.mkdir(parents=True, exist_ok=True)
     started = now
     errors: list[str] = []
+    components: list[Component] = []
 
     try:
         if hooks:
@@ -144,6 +146,7 @@ def run_job(
         # An aborted run (a raising pre_backup gate, a full disk while bundling)
         # must not fail silently: send an error alert, then propagate as before.
         errors.append(f"run aborted: {type(exc).__name__}: {_describe(exc)}")
+        _record_state(data_dir, job, sid, "error", started, components)
         if notifier:
             try:
                 notifier.notify(_event(job, instance_name, sid, "error", 0, errors, started, now,
@@ -166,6 +169,7 @@ def run_job(
     stored = stored_path if stored_path.exists() else None
     result = JobResult(status=status, snapshot_id=sid, archive=stored,
                        total_bytes=manifest.total_bytes, components=components, errors=errors)
+    _record_state(data_dir, job, sid, status, started, components)
 
     if notifier:
         notifier.notify(_event(job, instance_name, sid, status, manifest.total_bytes, errors,
@@ -175,6 +179,20 @@ def run_job(
         hooks.run("post_backup", {"job": job.name, "snapshot_id": sid, "status": status})
     log.info("job %s snapshot %s finished: %s", job.name, sid, status)
     return result
+
+
+def _record_state(data_dir: Path, job: Job, sid: str, status: str, started: datetime,
+                  components: list[Component]) -> None:
+    """Leave this run's outcome for the healthcheck (backuphelper.state). It
+    must never fail the run: the snapshot and the alert matter more, and a data
+    dir that cannot take the record is reported by the healthcheck itself."""
+    try:
+        record_run(data_dir, RunRecord(
+            job=job.name, snapshot_id=sid, status=status, started_at=started,
+            failed_components=tuple(c.name for c in components if c.error)))
+    except Exception as exc:  # noqa: BLE001
+        log.error("could not record the outcome of job %s for the healthcheck: %s",
+                  job.name, _describe(exc))
 
 
 _NESTED_TAR_KINDS = {"filesystem", "s3"}
