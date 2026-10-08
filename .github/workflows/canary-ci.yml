@@ -1,0 +1,34 @@
+# Temporary canary CI (canary-base/* branches only, deleted afterwards).
+# Stands in for a PR CI: a quick job, then a job that only starts after it
+# (so the merge job has to wait for a workflow whose later job does not exist
+# yet) and fails when the PR title contains "canary-fail".
+name: canary ci
+
+on:
+  pull_request:
+    branches: ['canary-base/**']
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: echo "lint ok"
+
+  build:
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - shell: bash
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          sleep 90
+          case "$TITLE" in
+            *canary-fail*) echo "simulated CI failure"; exit 1 ;;
+          esac
+          echo "build ok"
