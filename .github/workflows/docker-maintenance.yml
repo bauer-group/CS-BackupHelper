@@ -22,7 +22,7 @@ permissions:
 jobs:
   maintenance:
     name: Auto-merge Dependabot PRs
-    uses: bauer-group/automation-templates/.github/workflows/docker-maintenance-dependabot.yml@main
+    uses: bauer-group/automation-templates/.github/workflows/docker-maintenance-dependabot.yml@fix/dependabot-merge-guard
     with:
       merge-method: 'squash'
       auto-approve: true
