@@ -4,6 +4,13 @@ All notable changes to this project are documented here. This file is maintained
 automatically by [semantic-release](https://github.com/semantic-release/semantic-release)
 on every release to `main`.
 
+## [1.7.7](https://github.com/bauer-group/CS-BackupHelper/compare/v1.7.6...v1.7.7) (2026-10-08)
+
+### 🐛 Bug Fixes
+
+* **healthcheck:** stopped reporting failed or missing backups as healthy ([f2d52db](https://github.com/bauer-group/CS-BackupHelper/commit/f2d52db253099d72326d9a1f537b64000458539e))
+* **runner:** reported a run with a failed component as error ([a528150](https://github.com/bauer-group/CS-BackupHelper/commit/a528150300f7dff4cafe0e6715f1feb925ec1ffe))
+
 ## [1.7.6](https://github.com/bauer-group/CS-BackupHelper/compare/v1.7.5...v1.7.6) (2026-10-08)
 
 ### 🐛 Bug Fixes
