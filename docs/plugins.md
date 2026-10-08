@@ -41,8 +41,12 @@ class Source(ABC):
   out of validation errors, so a mistyped secret is never echoed into a log.
 - `produce(staging_dir)` writes files into `staging_dir` and returns a list of
   `StagedComponent`. Report a failure by returning a component with `error=` set
-  and `path=None` rather than raising, so one bad source degrades the job to a
-  partial snapshot instead of aborting it. If `produce` (or the constructor)
+  and `path=None` rather than raising. The other sources still run and the
+  snapshot is stored with the failed component recorded, but the run ends in
+  `error` — exit `1`, error alert, unhealthy healthcheck — because the snapshot
+  lacks this source's data (see [run status](cli.md#run-status)). A component
+  returned with `path=None` and no `error` is recorded with the error
+  `no output`. If `produce` (or the constructor)
   raises anyway, the engine records it the same way — a component with the
   source's component name, `kind` = its type, size `0`, empty `sha256` and
   `error` = `"<ExceptionType>: <message>"` — and discards any files the source
@@ -97,7 +101,7 @@ class NocoDBSource(Source):
         try:
             # self.spec holds the config keys from the job's source entry.
             data = _export_via_rest(self.spec["base_url"], self.spec["token"])
-        except Exception as exc:  # degrade to a partial snapshot, don't abort
+        except Exception as exc:  # record the failure, the other sources still run
             return [StagedComponent(name="nocodb", kind=self.type, path=None,
                                     error=f"nocodb export failed: {exc}")]
         out.write_text(data, encoding="utf-8")

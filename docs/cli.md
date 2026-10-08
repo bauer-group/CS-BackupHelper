@@ -7,7 +7,7 @@ The container entrypoint is `backuphelper` (`ENTRYPOINT ["/sbin/tini", "--", "ba
 | Mode | Invocation | Behaviour |
 | ---- | ---------- | --------- |
 | **Daemon** (default) | `backuphelper` (no args) | Starts a blocking APScheduler. Each job runs on its own `cron` trigger; jobs with `schedule.on_startup` also fire once at boot. Runs until the process is signalled. This is what `restart: unless-stopped` keeps alive. |
-| **One-shot** | `backuphelper --now` | Runs **every** configured job exactly once, then exits. Exit `0` if all jobs succeeded (or degraded to `warning`), `1` if any job ended in `error`. |
+| **One-shot** | `backuphelper --now` | Runs **every** configured job exactly once, then exits. Exit `0` if every job ended in `success` or `warning`, `1` if any job ended in `error` — see [run status](#run-status). |
 | **Subcommand** | `backuphelper <command> …` | Runs a single maintenance/restore command (`create`, `list`, `show`, `verify`, `restore`, `prune`, `download`, `config`, `healthcheck`) and exits. |
 
 ## Invocation forms
@@ -35,9 +35,26 @@ Because arguments are appended after the `backuphelper` entrypoint, `docker run 
 | `TZ` | `Etc/UTC` | daemon | Timezone for cron scheduling. |
 | `BACKUP_LOG_LEVEL` | `INFO` | daemon / `--now` | Log verbosity. |
 | `BACKUP_LOG_FORMAT` | `console` | daemon / `--now` | `console` or structured JSON logging. |
-| `BACKUP_HEALTHCHECK_MAX_AGE_HOURS` | `26` | `healthcheck` | Age threshold for the freshness probe. |
+| `BACKUP_HEALTHCHECK_MAX_AGE_HOURS` | `26` | `healthcheck` | Maximum age of the last run, and the grace after the daemon start while no backup has run yet. Set it above the longest gap between two scheduled runs — e.g. `170` for a weekly schedule, see [deployment](deployment.md#choosing-backup_healthcheck_max_age_hours). |
 
 Config loading is uniform: the commands that need the job definition (`create`, `restore`, `prune`, `config`, and the daemon/`--now` modes) all build it through the same layered loader — discrete `BACKUP_<PATH>__…` overrides on top of inline `BACKUP_CONFIG_JSON` / `BACKUP_CONFIG_JSON_BASE64` on top of a mounted `BACKUP_CONFIG_FILE`, with `${VAR}` placeholders interpolated from the environment. See [configuration](configuration.md) for the full precedence rules and [sources](sources.md) for per-source keys. The snapshot-only commands (`list`, `show`, `verify`, `download`, `healthcheck`) read the data dir directly and need no job config.
+
+## Run status
+
+Every run of a job ends in one of three statuses. The status decides the exit code of `--now` / `create`, the alert and what the healthcheck reports. **Changed in 1.7.7:** a component that failed completely makes the whole run `error`. Up to 1.7.6 the run only degraded to `warning` as long as another component succeeded.
+
+| Status | When | Examples | `--now` / `create` | Alert | Healthcheck |
+| ------ | ---- | -------- | ------------------ | ----- | ----------- |
+| `success` | Every component was backed up and the snapshot was stored on every destination. | — | exit `0` | delivered only at `level: all` (title `backup success`) | healthy while fresh |
+| `warning` | Every component was backed up and the snapshot is stored, but something non-fatal went wrong. | a filesystem source skipped unreadable files (`metadata.warnings`) · an S3 destination is unreachable or its upload failed while the local copy exists (or a fallback copy was kept in the data dir) · `keep_local: false` kept the local copy because no off-site copy exists · encryption failed and the snapshot was stored unencrypted · retention failed | exit `0` | delivered at `level: warnings` (default) and `all` | healthy while fresh |
+| `error` | A component failed completely, the snapshot was stored on no destination, or the run aborted. | `pg_dump` / `mariadb-dump` / `mysqldump` failed · a plugin source raised · an S3 *source* failed · a filesystem `path` is missing or unreadable · a source returned no output · the local and the off-site put both failed · a `pre_backup` hook raised | exit `1` | delivered at every level (`errors`, `warnings`, `all`); the [healthchecks](notifications.md#healthchecks-dead-mans-switch) channel pings `/fail` | unhealthy until a newer run ends in `success` or `warning` |
+
+- A snapshot with a failed component is still stored, listed and verifiable, and its good components stay restorable (`restore <id> --only <name>`). The failed component holds no data and is listed in the manifest with size `0`, an empty `sha256` and its `error` text.
+- Disabled sources (`"enabled": false`) and S3 sources without a `bucket` produce no component and never affect the status.
+- An aborted run (an exception before the run finished, e.g. a raising `pre_backup` hook or a full disk while bundling) sends an `error` alert and ends `--now` / `create` with exit `1`; jobs listed after it in the same invocation do not run.
+- The alert message is a fixed text per outcome — `snapshot completed`, `snapshot completed with warnings`, `snapshot is incomplete - a component failed`, `snapshot was not stored on any destination`, `run aborted before it finished`. The details are in the alert's error list.
+
+The sidecar manifest records the status of the snapshot's **content** as `status`: `error` when a component failed, `warning` when a component reported `metadata.warnings`, else `success`. Destination, encryption, retention and `keep_local` problems happen after the manifest is written, so they show up only in the run status (exit code, alert, healthcheck), not in the manifest. Manifests written before 1.7.7 have no `status` field.
 
 ## Commands
 
@@ -61,7 +78,7 @@ docker run --rm --env-file .env -v backup-data:/data \
 docker compose run --rm backup --now
 ```
 
-Exit codes: daemon runs until signalled; `--now` returns `0` (all jobs succeeded/warned) or `1` (at least one job errored).
+Exit codes: daemon runs until signalled; `--now` returns `0` (every job ended in `success` or `warning`) or `1` (at least one job ended in `error` — a failed component, a snapshot stored nowhere or an aborted run). See [run status](#run-status).
 
 ### `create`
 
@@ -73,7 +90,7 @@ docker run --rm --env-file .env -v backup-data:/data \
 docker compose run --rm backup create
 ```
 
-Exit codes: `0` all jobs OK/warning · `1` any job errored.
+Exit codes: `0` every job ended in `success` or `warning` · `1` any job ended in `error` (see [run status](#run-status)).
 
 ### `list`
 
@@ -89,7 +106,7 @@ Exit codes: `0`.
 
 ### `show`
 
-Prints the sidecar manifest (`<id>.manifest.json`) for one snapshot — the component list, sizes, per-component sha256, `total_bytes`, `created_at`, and the `archive_sha256` used by `verify`. A source that failed during the backup is listed too, with size `0`, an empty `sha256` and its `error` text.
+Prints the sidecar manifest (`<id>.manifest.json`) for one snapshot — the component list, sizes, per-component sha256, `total_bytes`, `created_at`, the snapshot `status` (since 1.7.7, see [run status](#run-status)) and the `archive_sha256` used by `verify`. A source that failed during the backup is listed too, with size `0`, an empty `sha256` and its `error` text.
 
 | Argument | Description |
 | -------- | ----------- |
@@ -201,19 +218,23 @@ Exit codes: `0`.
 
 ### `healthcheck`
 
-The container `HEALTHCHECK` probe. Reads the newest sidecar manifest's `created_at` and reports healthy if it is within `BACKUP_HEALTHCHECK_MAX_AGE_HOURS`. A data dir with no manifests is treated as healthy (grace period for a freshly started daemon).
+The container `HEALTHCHECK` probe. It reports whether backups work — not only whether one is recent — and prints one line with its verdict and the reason. It is unhealthy when the data dir is not writable, when the most recent run ended in `error` or left a snapshot with a failed component, when the most recent run is older than `BACKUP_HEALTHCHECK_MAX_AGE_HOURS`, or when no backup has run within that time after the daemon started. It reads the run records in `<data dir>/.state/` and the sidecar manifests, so it also works for `keep_local: false`. The full rules are in [deployment](deployment.md#the-functional-healthcheck).
 
 ```bash
-docker compose run --rm backup healthcheck
+docker compose exec backup backuphelper healthcheck
+# healthy: the last backup is fresh: snapshot 2026-07-05_03-15-00 (job main) ran 7.2 h ago
+# unhealthy: the last backup failed: snapshot 2026-07-05_03-15-00 (job main) at 2026-07-05T03:15:00+00:00: failed component(s): database
 ```
 
-Exit codes: `0` last backup is fresh (or none yet) · `1` last backup is stale.
+Run it in the daemon's container (`exec`): a one-off `docker compose run --rm backup healthcheck` against a volume that no daemon has used yet reports `unhealthy: no backup has run yet and no daemon start is recorded`.
+
+Exit codes: `0` healthy · `1` unhealthy.
 
 ## Exit codes at a glance
 
 | Command | 0 | 1 | 2 |
 | ------- | - | - | - |
-| `--now` / `create` | all jobs OK/warning | any job errored | — |
+| `--now` / `create` | every job `success` / `warning` | any job `error` | — |
 | `list` | always | — | — |
 | `show` | printed | not found | — |
 | `verify` | matches manifest | — | mismatch / missing |
@@ -221,4 +242,4 @@ Exit codes: `0` last backup is fresh (or none yet) · `1` last backup is stale.
 | `download` | copied | not found | — |
 | `prune` | always | — | — |
 | `config` | always | — | — |
-| `healthcheck` | fresh / none yet | stale | — |
+| `healthcheck` | healthy | last run failed, stale, no backup after the grace, or data dir not writable | — |

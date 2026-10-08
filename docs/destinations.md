@@ -34,7 +34,7 @@ A failing destination does not abort the run, and a snapshot is only lost when n
 
 #### Catching up after an S3 outage
 
-A snapshot that should be off-site but is not — an S3-only job's fallback copy, or a job listing both `local` and `s3` whose S3 upload failed — is marked with a `<snapshot-id>.offsite-pending.json` file next to its manifest (it names the job). The next run of that job that reaches an off-site destination uploads every pending snapshot there and removes the marker. When the job keeps no local copies (S3-only, or `"keep_local": false`) the local copy goes too, so the data dir is empty again once S3 is back and the [healthcheck](deployment.md#the-functional-healthcheck) does not age on a leftover manifest. A pending upload that fails again stays pending and is retried on the following run. Retention and `prune` delete a marker together with its snapshot.
+A snapshot that should be off-site but is not — an S3-only job's fallback copy, or a job listing both `local` and `s3` whose S3 upload failed — is marked with a `<snapshot-id>.offsite-pending.json` file next to its manifest (it names the job). The next run of that job that reaches an off-site destination uploads every pending snapshot there and removes the marker. When the job keeps no local copies (S3-only, or `"keep_local": false`) the local copy goes too, so no snapshot is left in the data dir once S3 is back (only the run records in `.state/` stay) and the [healthcheck](deployment.md#the-functional-healthcheck) does not age on a leftover manifest. A pending upload that fails again stays pending and is retried on the following run. Retention and `prune` delete a marker together with its snapshot.
 
 ```json
 {
