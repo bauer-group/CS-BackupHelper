@@ -65,10 +65,22 @@ jobs:
       scan-directory: '.'
       severity: 'error'
 
+  # amd64 keeps the check name "🧪 Pytest"; arm64 runs on GitHub's hosted Arm
+  # runner (free for public repositories), as the released image is multi-arch.
   test:
-    name: 🧪 Pytest
-    runs-on: ubuntu-latest
+    name: 🧪 Pytest${{ matrix.arch == 'arm64' && ' (arm64)' || '' }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -81,13 +93,17 @@ jobs:
 
   # Real backup -> restore round trips through the engine image itself (its own
   # pg_dump/pg_restore and mariadb-dump/mariadb clients) against real servers:
-  # scripts/e2e.sh on docker-compose.e2e.yml. "compose" runs the server images
-  # of that file (Dependabot keeps them current); "lts" the oldest lines the
-  # fleet runs; "latest" the newest releases, so a server the engine cannot back
-  # up blocks the release before a consumer meets it.
+  # scripts/e2e.sh on docker-compose.e2e.yml, one suite per leg so they run in
+  # parallel. The engines suite runs against the server images of that file
+  # ("compose", Dependabot keeps them current), the oldest lines the fleet runs
+  # ("lts"), the newest releases ("latest") and MariaDB 11.8, so a server the
+  # engine cannot back up blocks the release before a consumer meets it. The
+  # feature suites deliver alerts, run two jobs under the daemon, talk TLS to
+  # S3 and encrypt; "arm64" builds the image natively (with its pytest gate)
+  # and runs every suite that needs no MinIO (CS-MinIO is amd64-only).
   e2e:
-    name: 🧪 E2E Round Trip (${{ matrix.servers }})
-    runs-on: ubuntu-latest
+    name: 🧪 E2E Round Trip (${{ matrix.leg }})
+    runs-on: ${{ matrix.runner || 'ubuntu-latest' }}
     timeout-minutes: 30
     permissions:
       contents: read
@@ -95,19 +111,35 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - servers: compose
-          - servers: lts
+          - leg: compose
+          - leg: lts
             mariadb: 'mariadb:11.4'
             mysql: 'mysql:8.4'
-          - servers: latest
+          - leg: latest
             mariadb: 'mariadb:latest'
             mysql: 'mysql:latest'
+          - leg: mariadb-11.8
+            mariadb: 'mariadb:11.8'
+          - leg: alerts
+            suites: alerts
+          - leg: multijob
+            suites: multijob
+          - leg: tls
+            suites: tls
+          - leg: encryption
+            suites: encryption
+          - leg: arm64
+            runner: ubuntu-24.04-arm
+            suites: engines alerts multijob encryption
+            minio: '0'
     steps:
       - uses: actions/checkout@v7
       - name: Run the round trips
         env:
+          E2E_SUITES: ${{ matrix.suites || 'engines' }}
           E2E_MARIADB_IMAGE: ${{ matrix.mariadb }}
           E2E_MYSQL_IMAGE: ${{ matrix.mysql }}
+          E2E_MINIO: ${{ matrix.minio || '1' }}
         run: bash scripts/e2e.sh
 
   # ============================================
