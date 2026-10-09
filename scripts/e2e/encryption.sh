@@ -79,6 +79,8 @@ else
 fi
 
 echo "== encryption: gpg =="
+# The age checks end with the file deleted: every mode backs up the same tree.
+in_files "echo enc-data > /files/enc/data.txt" >/dev/null
 gpg_job=$(enc_job encgpg '{"mode":"gpg","recipient":"'"$gpg_fpr"'"}')
 out=$(enc_cli /keys/gpg-backup "$gpg_job" --now); sid=$(printf '%s' "$out" | sid_of)
 files=$(stored "$sid")
