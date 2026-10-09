@@ -5,6 +5,12 @@ substitute a recorder and assert on the built message and recipients without
 ever opening a socket. STARTTLS and authentication are applied only when the
 config asks for them.
 
+Every socket operation of the SMTP session is bounded by
+:data:`SMTP_TIMEOUT_SECONDS`. Without it a server that never answers - an
+SMTPS port waiting for a TLS handshake the client never starts, a stalled
+relay - would block the run that sends the alert, and with it every later
+scheduled run of the job, indefinitely.
+
 Every value interpolated into the HTML part is escaped: error texts carry run
 data (file names, database and exception messages) that must reach the
 recipient as text and never be interpreted as markup by the mail client. The
@@ -27,6 +33,11 @@ from backuphelper.notify.base import (
 )
 
 SmtpFactory = Callable[..., smtplib.SMTP]
+
+# Upper bound for every blocking step of the SMTP session (connect, greeting,
+# each command, the message upload). Generous for a submission server, finite
+# so an unresponsive one fails the channel instead of hanging the run.
+SMTP_TIMEOUT_SECONDS = 60
 
 
 def _esc(value: object) -> str:
@@ -53,7 +64,9 @@ class EmailChannel(Channel):
 
         msg = self._build_message(event)
 
-        with self._smtp_factory(self.cfg.host, self.cfg.port) as smtp:
+        with self._smtp_factory(
+            self.cfg.host, self.cfg.port, timeout=SMTP_TIMEOUT_SECONDS
+        ) as smtp:
             if self.cfg.tls:
                 smtp.starttls()
             if self.cfg.username and self.cfg.password:

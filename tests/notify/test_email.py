@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import socket
+import threading
 from dataclasses import replace
 from html.parser import HTMLParser
 
 import pytest
 
 from backuphelper.config.models import EmailChannelConfig
+from backuphelper.notify import email as email_module
 from backuphelper.notify.base import AlertEvent
 from backuphelper.notify.email import EmailChannel
 
@@ -257,3 +260,48 @@ def test_email_text_part_keeps_error_texts_verbatim():
 
     assert f"  - {MARKUP}" in text
     assert "&lt;" not in text and "&amp;" not in text
+
+
+# ---------------------------------------------------------------- timeouts ---
+
+
+def test_email_bounds_the_smtp_session_with_a_timeout():
+    created: list = []
+    EmailChannel(_cfg(), smtp_factory=_factory(created)).send(_event())
+    assert created[0].timeout == email_module.SMTP_TIMEOUT_SECONDS
+    assert 0 < email_module.SMTP_TIMEOUT_SECONDS <= 300
+
+
+def test_email_gives_up_on_a_server_that_never_greets(monkeypatch):
+    # An SMTPS port (465) waits for a TLS handshake while a plain SMTP client
+    # waits for the 220 greeting: without a timeout both wait forever and the
+    # run that sends the alert never finishes. A real socket and the real
+    # smtplib.SMTP, so the bound is proven end to end.
+    monkeypatch.setattr(email_module, "SMTP_TIMEOUT_SECONDS", 0.5)
+    server = socket.create_server(("127.0.0.1", 0))
+    accepted: list = []
+    threading.Thread(target=lambda: accepted.append(server.accept()), daemon=True).start()
+    outcome: list = []
+
+    def send():
+        try:
+            EmailChannel(
+                _cfg(host="127.0.0.1", port=server.getsockname()[1], tls=False)
+            ).send(_event())
+            outcome.append(None)
+        except Exception as exc:  # noqa: BLE001 - the test inspects it
+            outcome.append(exc)
+
+    sender = threading.Thread(target=send, daemon=True)
+    try:
+        sender.start()
+        sender.join(10)
+        assert not sender.is_alive(), "email channel still blocked on a silent server"
+        # smtplib reports the expired greeting read as SMTPServerDisconnected
+        # ("... timed out"), an OSError the alert manager logs per channel.
+        assert isinstance(outcome[0], OSError)
+        assert "timed out" in str(outcome[0])
+    finally:
+        for conn, _ in accepted:
+            conn.close()
+        server.close()

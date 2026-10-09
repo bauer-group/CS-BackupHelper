@@ -65,6 +65,8 @@ A channel that is listed in `channels` but lacks its required setting (an empty 
 
 Sends a multipart text + HTML message over SMTP. STARTTLS and login are applied only when configured.
 
+Each step of the SMTP session (connect, greeting, every command, the message upload) must complete within 60 seconds. A server that does not answer in time fails the email channel like any other delivery error (logged, other channels still receive the alert) instead of blocking the run. Up to 1.7.7 there was no limit: a server that never answered, such as an SMTPS port 465 waiting for a TLS handshake, blocked the run and every later scheduled run of the job.
+
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `host` | string | `null` | SMTP server. Required — without it the channel is skipped with a warning. |
