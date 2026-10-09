@@ -57,6 +57,8 @@ An unrecognized `level` value falls back to `warnings`. If `channels` is empty, 
 
 Each channel is delivered independently inside its own `try`/`except`. If its send raises (bad URL, SMTP auth failure, HTTP error), the failure is logged with a stack trace and delivery continues to the remaining channels. One broken channel never suppresses a working one, and a channel failure does not fail the backup job.
 
+Every delivery is bounded in time. The HTTP channels (webhook, Teams, Slack, Discord, ntfy, Healthchecks) must connect within 30 seconds, and each wait for the receiver's answer is limited to 30 seconds as well; a receiver that does not answer in time — a hanging endpoint or proxy — fails its channel like any other delivery error, and the next channel is delivered. Up to 1.10.0 there was no limit: such a receiver held up the run that sent the alert, and under the daemon every later run of the job. The email channel has its own limit, see [connection security](#connection-security).
+
 A channel that is listed in `channels` but lacks its required setting (an empty `url`, an email channel without `host` or without any recipient address) is **not configured** rather than failing: it is skipped with one warning line, e.g. `notification channel 'email' skipped — not configured: email channel has no recipient address`, and nothing is sent.
 
 ## Channels
