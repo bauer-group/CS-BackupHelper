@@ -4,6 +4,20 @@ All notable changes to this project are documented here. This file is maintained
 automatically by [semantic-release](https://github.com/semantic-release/semantic-release)
 on every release to `main`.
 
+## [1.10.0](https://github.com/bauer-group/CS-BackupHelper/compare/v1.9.0...v1.10.0) (2026-10-09)
+
+### 🚀 Features
+
+* **healthcheck:** judged every job on its own with its own max age ([5861dce](https://github.com/bauer-group/CS-BackupHelper/commit/5861dce8d99e82f9013f19625be099c5dabafd3e))
+
+### 🐛 Bug Fixes
+
+* **config:** restored 1.7.7 handling of quoted and null overrides ([b2f640c](https://github.com/bauer-group/CS-BackupHelper/commit/b2f640cffc15aa629795eca54ef7f87567d7eab2))
+* **config:** typed discrete env overrides by their target field ([b0bf3e6](https://github.com/bauer-group/CS-BackupHelper/commit/b0bf3e614dd36ee847b3e97b448221e76f45e32c))
+* **healthcheck:** kept config error details out of the health log ([757e6b1](https://github.com/bauer-group/CS-BackupHelper/commit/757e6b1e6d95958cb2042927ea6d68d70eba0a3e))
+* **retention:** pruned only each job's own snapshots ([f07918f](https://github.com/bauer-group/CS-BackupHelper/commit/f07918f131528f907552d239f9084ccff18194a6))
+* **runner:** named the job in snapshot ids of multi-job configs ([75e0835](https://github.com/bauer-group/CS-BackupHelper/commit/75e08350474648169f2e80ce5809fe77bf99492d))
+
 ## [1.9.0](https://github.com/bauer-group/CS-BackupHelper/compare/v1.8.0...v1.9.0) (2026-10-09)
 
 ### 🚀 Features
