@@ -32,8 +32,8 @@ def http_post(url: str, data: bytes, headers: Mapping[str, str]) -> None:
     request = urllib.request.Request(
         url, data=data, headers=dict(headers), method="POST"
     )
-    # nosec B310 - operator-configured URL
-    with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS):
+    # The URL is the operator's own channel config (bandit B310).
+    with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS):  # nosec B310
         pass
 
 
