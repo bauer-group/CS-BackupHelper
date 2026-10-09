@@ -18,9 +18,8 @@ class ConfigModel(BaseModel):
     """Base of every config model (sources, destinations and plugins may use it).
 
     A validation error must not echo the offending value: it can be a secret
-    (e.g. a numeric password from a discrete env override, which the loader
-    JSON-parses into an int) and the error text ends up in logs, alerts and
-    the snapshot manifest."""
+    (e.g. a password written as a JSON number) and the error text ends up in
+    logs, alerts and the snapshot manifest."""
 
     model_config = ConfigDict(hide_input_in_errors=True)
 

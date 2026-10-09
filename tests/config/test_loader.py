@@ -81,12 +81,86 @@ def test_invalid_json_raises_config_error():
 
 
 def test_invalid_config_error_does_not_echo_the_value():
-    # A discrete override is JSON-parsed, so a numeric SMTP password arrives as
-    # an int and fails validation; the error (printed at startup) must name the
-    # field, never the value.
-    env = {"BACKUP_CONFIG_JSON": json.dumps({"jobs": [{"name": "main"}]}),
-           "BACKUP_JOBS__0__NOTIFICATIONS__EMAIL__PASSWORD": "20261006"}
+    # A JSON number where the SMTP password expects text fails validation; the
+    # error (printed at startup) must name the field, never the value.
+    env = {"BACKUP_CONFIG_JSON": json.dumps(
+        {"jobs": [{"name": "main", "notifications": {"email": {"password": 20261006}}}]})}
     with pytest.raises(ConfigError) as info:
         load_config(env=env)
     assert "password" in str(info.value)
     assert "20261006" not in str(info.value)
+
+
+# ── discrete overrides are typed by the field they set ───────────────────────
+def _with(**overrides):
+    base = {"jobs": [{"name": "main",
+                      "sources": [{"type": "postgres", "host": "db", "database": "app"}],
+                      "destinations": [{"type": "s3", "bucket": "offsite"}]}]}
+    return {"BACKUP_CONFIG_JSON": json.dumps(base), **overrides}
+
+
+def test_a_numeric_secret_override_stays_text():
+    # Regression: the override was JSON-parsed into the int 20261006, so a
+    # numeric SMTP password failed validation and the daemon did not start.
+    cfg = load_config(env=_with(BACKUP_JOBS__0__NOTIFICATIONS__EMAIL__PASSWORD="20261006"))
+    assert cfg.jobs[0].notifications.email.password == "20261006"
+
+
+def test_a_numeric_source_or_destination_secret_override_stays_text():
+    # A source's and a destination's own keys are not declared by the engine;
+    # a number there used to arrive as an int and failed the source's model.
+    from backuphelper.plugins.registry import build_source
+
+    cfg = load_config(env=_with(BACKUP_JOBS__0__SOURCES__0__PASSWORD="20261006",
+                                BACKUP_JOBS__0__SOURCES__0__USER="1000",
+                                BACKUP_JOBS__0__DESTINATIONS__0__SECRET_KEY="90817263"))
+    job = cfg.jobs[0]
+    assert job.sources[0].model_extra["password"] == "20261006"
+    assert job.destinations[0].model_extra["secret_key"] == "90817263"
+    source = build_source(job.sources[0].model_dump())  # the source's own model accepts it
+    assert source.cfg.password == "20261006" and source.cfg.user == "1000"
+
+
+def test_overrides_never_reformat_numeric_looking_text():
+    # "1e5" used to become 100000.0 and "1.50" became 1.5 - silently another
+    # value for a text field or a key the engine does not declare.
+    cfg = load_config(env=_with(BACKUP_JOBS__0__NAME="1.50",
+                                BACKUP_JOBS__0__SCHEDULE__HOUR="3",
+                                BACKUP_JOBS__0__SCHEDULE__MINUTE="05",
+                                BACKUP_JOBS__0__SOURCES__0__LABEL="1e5",
+                                BACKUP_JOBS__0__SOURCES__0__VERSION="1.50",
+                                BACKUP_JOBS__0__ENCRYPTION__RECIPIENT="null"))
+    job = cfg.jobs[0]
+    assert job.name == "1.50"
+    assert (job.schedule.hour, job.schedule.minute) == ("3", "05")
+    assert job.sources[0].model_extra["label"] == "1e5"
+    assert job.sources[0].model_extra["version"] == "1.50"
+    assert job.encryption.recipient == "null"
+
+
+def test_number_boolean_and_structured_overrides_keep_working():
+    from backuphelper.destinations.s3 import S3DestinationConfig
+    from backuphelper.plugins.registry import build_source
+
+    cfg = load_config(env=_with(BACKUP_JOBS__0__RETENTION__COUNT="30",
+                                BACKUP_JOBS__0__RETENTION__GFS='{"daily": 7}',
+                                BACKUP_JOBS__0__KEEP_LOCAL="false",
+                                BACKUP_JOBS__0__SCHEDULE__INTERVAL_HOURS="1e1",
+                                BACKUP_JOBS__0__SCHEDULE__ON_STARTUP="true",
+                                BACKUP_JOBS__0__NOTIFICATIONS__CHANNELS='["email"]',
+                                BACKUP_JOBS__0__NOTIFICATIONS__EMAIL__PORT="465",
+                                BACKUP_JOBS__0__SOURCES__0__PORT="5433",
+                                BACKUP_JOBS__0__SOURCES__0__ENABLED="false",
+                                BACKUP_JOBS__0__SOURCES__0__EXCLUDE_TABLE_DATA='["logs"]',
+                                BACKUP_JOBS__0__DESTINATIONS__0__ENSURE_BUCKET="false",
+                                BACKUP_JOBS__0__DESTINATIONS__0__MULTIPART_THRESHOLD="1048576"))
+    job = cfg.jobs[0]
+    assert job.retention.count == 30 and job.retention.gfs.daily == 7
+    assert job.keep_local is False and job.schedule.on_startup is True
+    assert job.schedule.interval_hours == 10
+    assert job.notifications.channels == ["email"] and job.notifications.email.port == 465
+    extra = job.sources[0].model_extra
+    assert extra["enabled"] is False and extra["exclude_table_data"] == ["logs"]
+    assert build_source(job.sources[0].model_dump()).cfg.port == 5433
+    dest = S3DestinationConfig.model_validate(job.destinations[0].model_dump(exclude={"type"}))
+    assert dest.ensure_bucket is False and dest.multipart_threshold == 1048576
