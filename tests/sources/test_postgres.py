@@ -329,6 +329,41 @@ def test_a_failed_script_generation_never_reaches_the_database(tmp_path):
     assert run.applied_sql == []
 
 
+def test_privileges_are_dropped_by_default_both_ways(tmp_path):
+    cfg = PostgresSource(_cfg()).cfg
+    assert cfg.keep_acl is False
+    for fmt, dump in (("custom", "/x/db.dump"), ("plain", "/x/db.sql")):
+        assert "--no-acl" in build_dump_argv(PostgresSource(_cfg(dump_format=fmt)).cfg, Path(dump))
+    assert "--no-acl" in build_restore_argv(cfg, Path("/r/logto.dump"))
+    comp = PostgresSource(_cfg(), run=_FakeRun()).produce(tmp_path)[0]
+    assert "acl" not in comp.metadata
+
+
+def test_keep_acl_dumps_and_restores_the_privileges(tmp_path):
+    # A restricted runtime role keeps its GRANTs across a restore (CS-IAMStack
+    # needed a post_restore hook for that while the engine forced --no-acl).
+    for fmt, dump in (("custom", "/x/db.dump"), ("plain", "/x/db.sql")):
+        cfg = PostgresSource(_cfg(dump_format=fmt, keep_acl=True)).cfg
+        argv = build_dump_argv(cfg, Path(dump))
+        assert "--no-acl" not in argv and "--no-owner" in argv
+    cfg = PostgresSource(_cfg(keep_acl=True)).cfg
+    argv = build_restore_argv(cfg, Path("/r/logto.dump"))
+    assert "--no-acl" not in argv and "--no-owner" in argv and "--clean" in argv
+    comp = PostgresSource(_cfg(keep_acl=True), run=_FakeRun()).produce(tmp_path)[0]
+    assert comp.metadata["acl"] is True
+
+
+def test_keep_acl_applies_to_the_partition_safe_restore(tmp_path):
+    run = _PgRun(live=LIVE)
+    PostgresSource(_cfg(keep_acl=True), run=run).restore(_staged_dump(tmp_path))
+    generate = next(c for c in run.calls if c[0] == "pg_restore" and "--file" in c)
+    assert "--no-acl" not in generate and "--clean" in generate
+
+
+def test_keep_acl_accepts_an_interpolated_string():
+    assert PostgresSource(_cfg(keep_acl="true")).cfg.keep_acl is True
+
+
 def test_plain_dumps_skip_the_catalog_query(tmp_path):
     (tmp_path / "logto.sql.gz").write_bytes(gzip.compress(b"SELECT 1;"))
     run = _PgRun(live=LIVE)

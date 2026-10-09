@@ -66,6 +66,10 @@ class PostgresConfig(ConfigModel):
     # (pg_dump --exclude-table-data) — e.g. n8n execution history: restore the
     # empty tables, not the bulky rows. Accepts a CSV string or a list.
     exclude_table_data: list[str] = Field(default_factory=list)
+    # Dump the privileges (GRANT/REVOKE, ALTER DEFAULT PRIVILEGES) and re-apply
+    # them on restore. Off by default (--no-acl both ways): a restore then leaves
+    # every recreated object with its owner's privileges only.
+    keep_acl: bool = False
 
     @field_validator("exclude_table_data", mode="before")
     @classmethod
@@ -91,15 +95,19 @@ def build_env(cfg: PostgresConfig) -> dict[str, str]:
     return env
 
 
+def _acl_flags(cfg: PostgresConfig) -> list[str]:
+    return [] if cfg.keep_acl else ["--no-acl"]
+
+
 def build_dump_argv(cfg: PostgresConfig, out_path: Path) -> list[str]:
     # Keep each excluded table's schema but drop its data (structure-only).
     exclude = [f"--exclude-table-data={t}" for t in cfg.exclude_table_data]
     if cfg.dump_format == "custom":
         return [
             "pg_dump", "--format=custom", "--compress=6",
-            "--no-owner", "--no-acl", *exclude, "--file", str(out_path),
+            "--no-owner", *_acl_flags(cfg), *exclude, "--file", str(out_path),
         ]
-    return ["pg_dump", "--format=plain", "--no-owner", "--no-acl", *exclude]
+    return ["pg_dump", "--format=plain", "--no-owner", *_acl_flags(cfg), *exclude]
 
 
 class PostgresSource(Source):
@@ -120,7 +128,9 @@ class PostgresSource(Source):
         out = staging_dir / f"{self.cfg.component_name()}{suffix}"
         env = build_env(self.cfg)
         argv = build_dump_argv(self.cfg, out)
-        meta = {"format": self.cfg.dump_format, "database": self.cfg.database}
+        meta: dict[str, Any] = {"format": self.cfg.dump_format, "database": self.cfg.database}
+        if self.cfg.keep_acl:
+            meta["acl"] = True  # `show` tells which snapshots carry the privileges
         try:
             if self.cfg.dump_format == "custom":
                 result = self._run(argv, env=env, capture_output=True, timeout=self.cfg.timeout)
@@ -150,7 +160,7 @@ class PostgresSource(Source):
 
 
 def _clean_restore_flags(cfg: PostgresConfig) -> list[str]:
-    return ["--clean", "--if-exists", "--no-owner", "--no-acl"]
+    return ["--clean", "--if-exists", "--no-owner", *_acl_flags(cfg)]
 
 
 def build_restore_argv(cfg: PostgresConfig, dump: Path) -> list[str]:
