@@ -554,6 +554,56 @@ def _refusing_hooks():
     return hooks
 
 
+def _ticking_clock(monkeypatch, *ticks):
+    """The runner's monotonic clock returns ``ticks`` in turn."""
+    from backuphelper import runner
+
+    readings = iter(ticks)
+    monkeypatch.setattr(runner, "_clock", lambda: next(readings))
+
+
+def test_the_alert_reports_how_long_the_run_took(tmp_path, monkeypatch):
+    # Regression: the duration was "finished - started" with both set to the
+    # run's start (``now``), so every alert said 0 s and the mail left the
+    # duration out. It is measured on a monotonic clock now, independent of
+    # ``now``, which only names the snapshot and dates the run.
+    _ticking_clock(monkeypatch, 100.0, 112.5)
+    spy = _Spy()
+    run_job(_fs_job(tmp_path), data_dir=tmp_path / "data", instance_name="i", notifier=spy,
+            now=NOW, snapshot_id="d1")
+    [event] = spy.events
+    assert event.duration_seconds == 12.5
+
+
+def test_an_aborted_run_reports_how_long_it_ran(tmp_path, monkeypatch):
+    _ticking_clock(monkeypatch, 50.0, 53.25)
+    spy = _Spy()
+    with pytest.raises(RuntimeError, match="quiesce"):
+        run_job(_fs_job(tmp_path), data_dir=tmp_path / "data", instance_name="i",
+                notifier=spy, now=NOW, snapshot_id="d2", hooks=_refusing_hooks())
+    [event] = spy.events
+    assert event.duration_seconds == 3.25
+
+
+def test_a_real_run_reports_a_positive_duration(tmp_path, monkeypatch):
+    # Without a pinned clock: the time the sources take shows up in the alert.
+    import time
+
+    from backuphelper.sources.filesystem import FilesystemSource
+
+    produce = FilesystemSource.produce
+
+    def slow_produce(self, staging):
+        time.sleep(0.05)
+        return produce(self, staging)
+
+    monkeypatch.setattr(FilesystemSource, "produce", slow_produce)
+    spy = _Spy()
+    run_job(_fs_job(tmp_path), data_dir=tmp_path / "data", instance_name="i", notifier=spy,
+            now=NOW, snapshot_id="d3")
+    assert spy.events[0].duration_seconds >= 0.05
+
+
 def test_an_aborted_run_turns_the_healthcheck_unhealthy(tmp_path):
     # Regression: a run that aborts before it writes a manifest left the
     # previous good snapshot as "the last backup" - healthy for another day.

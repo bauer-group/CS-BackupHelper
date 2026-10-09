@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -51,6 +52,11 @@ from .state import RunRecord, record_run
 log = logging.getLogger(__name__)
 
 _ENCRYPT_SUFFIX = {"age": ".age", "gpg": ".gpg"}
+
+# Measures how long a run takes (the alert's duration). Monotonic, so a clock
+# step during the run cannot distort it, and independent of the ``now`` a
+# caller passes to name and date the snapshot.
+_clock = time.monotonic
 
 
 class Notifier(Protocol):
@@ -109,6 +115,7 @@ def run_job(
     configured jobs (snapshots.scope_for); without it the job is treated as
     the only one: plain timestamp ids."""
     now = now or datetime.now(timezone.utc)
+    clock_start = _clock()
     scope = scope or SnapshotScope(job.name)
     sid = snapshot_id or scope.new_id(now)
     data_dir = Path(data_dir)
@@ -162,7 +169,8 @@ def run_job(
         _record_state(data_dir, job, sid, "error", started, components)
         if notifier:
             try:
-                notifier.notify(_event(job, instance_name, sid, "error", 0, errors, started, now,
+                notifier.notify(_event(job, instance_name, sid, "error", 0, errors,
+                                       _clock() - clock_start,
                                        message="run aborted before it finished"))
             except Exception:  # noqa: BLE001 - never mask the original failure
                 log.exception("could not send the alert for aborted job %s", job.name)
@@ -186,7 +194,7 @@ def run_job(
 
     if notifier:
         notifier.notify(_event(job, instance_name, sid, status, manifest.total_bytes, errors,
-                               started, now,
+                               _clock() - clock_start,
                                message=_outcome(status, components, stored_anywhere)))
     if hooks:
         hooks.run("post_backup", {"job": job.name, "snapshot_id": sid, "status": status})
@@ -680,10 +688,9 @@ def parse_snapshot_timestamp(sid: str, fallback: datetime) -> datetime:
 
 
 def _event(job: Job, instance: str, sid: str, status: str, total_bytes: int,
-           errors: list[str], started: datetime, finished: datetime,
-           message: str) -> AlertEvent:
+           errors: list[str], duration: float, message: str) -> AlertEvent:
     return AlertEvent(
         status=status, title=f"backup {status}", message=message, instance=instance,
         snapshot_id=sid, job=job.name, total_bytes=total_bytes,
-        duration_seconds=max(0.0, (finished - started).total_seconds()), errors=list(errors),
+        duration_seconds=max(0.0, duration), errors=list(errors),
     )
