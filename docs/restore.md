@@ -123,7 +123,7 @@ If the snapshot is only available off-site, first copy the archive **and** its `
 
 ## Limitations and caveats
 
-- **Validate DB restore against staging first.** The database restore paths (Postgres `pg_restore`/`psql`, MariaDB/MySQL client replay) are covered by unit tests, but have not been proven against a production-scale live database. Before relying on them for a real recovery, rehearse the full restore against a **staging** copy of the target DB and confirm the data and schema come back intact.
+- **Validate DB restore against staging first.** The database restore paths (Postgres `pg_restore`/`psql`, MariaDB/MySQL client replay) are covered by unit tests and by real-server round trips in CI (`scripts/e2e.sh`: PostgreSQL 18 incl. partitioned tables and grants, MariaDB 11.4–13, MySQL 8.0–26.7), but have not been proven against a production-scale live database. Before relying on them for a real recovery, rehearse the full restore against a **staging** copy of the target DB and confirm the data and schema come back intact.
 - **Filesystem restore is additive.** It overwrites and adds files but never deletes stray files already on disk. For a byte-exact tree, restore into an empty/clean target path.
 - **`env` is never auto-applied.** Environment variables are captured for reference only; you must re-apply them yourself.
 - **Restore refuses a corrupt archive.** It re-checks `archive_sha256` before decrypting and stops on a mismatch. Still run `verify` first, so a bad snapshot shows up before the application is stopped.
