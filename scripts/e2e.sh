@@ -21,6 +21,8 @@
 #   tls       S3 destination and source on MinIO over HTTPS with a private CA:
 #             refused by default, ca_bundle (incl. hydration on restore and
 #             verify), verify_tls false and its warning.
+#   encryption  age and gpg with keys generated in the run: back up encrypted,
+#             verify, restore; failures stored UNENCRYPTED with a warning.
 #
 # TLS endpoints use a CA generated per run with openssl (.e2e-pki/, mounted
 # read-only at /pki); no key material is kept in the repository.
@@ -41,7 +43,7 @@ export MSYS_NO_PATHCONV=1   # keep /paths literal for git-bash on Windows
 
 cd "$(dirname "$0")/.." || exit 1
 COMPOSE="docker compose -f docker-compose.e2e.yml"
-ALL_SUITES="engines alerts multijob tls"
+ALL_SUITES="engines alerts multijob tls encryption"
 PKI=".e2e-pki"
 
 KEEP=""
