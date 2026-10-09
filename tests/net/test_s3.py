@@ -89,6 +89,7 @@ def https_endpoint(tmp_path, monkeypatch):
     ca_pem, cert_pem, key_pem = _write_pki(tmp_path)
     server = ThreadingHTTPServer(("127.0.0.1", 0), _BucketExists)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(cert_pem, key_pem)
     server.socket = context.wrap_socket(server.socket, server_side=True)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
