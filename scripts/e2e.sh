@@ -88,6 +88,8 @@ restored(){
   if printf '%s' "$2" | grep -q "restore complete" && [ "$3" = 0 ]; then ok "$1"; else ko "$1" "$2"; fi
 }
 in_files(){ $COMPOSE run --rm --entrypoint sh backup -c "$1" 2>&1; }
+# rand_secret: a throw-away credential, built at runtime (none in the repo).
+rand_secret(){ od -An -N16 -tx1 /dev/urandom | tr -d ' \n'; }
 
 # ── build the engine image (its Dockerfile runs the pytest gate) ─────────────
 echo "== build backup image =="
