@@ -294,7 +294,10 @@ def healthcheck() -> None:
     except (ConfigError, OSError) as exc:
         # The daemon cannot start with this config either; judge the data dir
         # without it - all runs together, BACKUP_HEALTHCHECK_MAX_AGE_HOURS.
-        typer.echo(f"config not loaded, all jobs are judged together: {exc}", err=True)
+        # Only the error's first line: Docker keeps this output in the health
+        # log, and a YAML error goes on with the offending config line.
+        summary = (str(exc).strip().splitlines() or [type(exc).__name__])[0].rstrip(" :")
+        typer.echo(f"config not loaded, all jobs are judged together: {summary}", err=True)
         jobs = []
     health = check_health(data_dir(), max_age, jobs=jobs)
     typer.echo(f"{'healthy' if health.healthy else 'unhealthy'}: {health.reason}")

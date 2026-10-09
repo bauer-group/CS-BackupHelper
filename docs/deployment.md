@@ -135,7 +135,9 @@ The newest of both by start time decides; on equal times the run record wins.
 The check loads the job config (like the daemon) for the job names and their
 max ages. If it cannot — the config is invalid, so the daemon cannot start with
 it either — it judges the data dir as a whole with
-`BACKUP_HEALTHCHECK_MAX_AGE_HOURS` and notes the config error on stderr.
+`BACKUP_HEALTHCHECK_MAX_AGE_HOURS` and notes the first line of the config
+error on stderr (Docker keeps that output in the health log, so the rest - a
+YAML error quotes the offending config line - stays in the daemon's log).
 
 `keep_local: false` and S3-only jobs leave no local manifest after a successful
 upload; their run records keep them monitored, so a job that stops running turns

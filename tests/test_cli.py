@@ -424,3 +424,18 @@ def test_healthcheck_still_judges_the_data_dir_when_the_config_does_not_load(tmp
     out = runner.invoke(app, ["healthcheck"], env=env)
     assert out.exit_code == 0 and out.stdout.startswith("healthy: the last backup is fresh")
     assert "config not loaded" in out.stderr
+
+
+def test_healthcheck_keeps_config_lines_out_of_the_health_log(tmp_path):
+    # Docker keeps the probe's output in the container's health log. A YAML
+    # error goes on, after its first line, with a snippet of the offending
+    # config line - which may hold a secret - so only the first line is shown.
+    dummy = "".join(chr(ord("a") + (n * 5) % 26) for n in range(12))  # built at runtime
+    cfg = tmp_path / "backup.yaml"
+    cfg.write_text(f'jobs:\n  - name: main\n    password: "{dummy}\n', encoding="utf-8")
+    env = {**_env(tmp_path), "BACKUP_CONFIG_FILE": str(cfg)}
+    _record(tmp_path / "data", "main", 1)
+    out = runner.invoke(app, ["healthcheck"], env=env)
+    assert out.exit_code == 0 and out.stdout.startswith("healthy: the last backup is fresh")
+    assert "config not loaded" in out.stderr and "not valid JSON/YAML" in out.stderr
+    assert dummy not in out.stderr and dummy not in out.stdout
