@@ -4,6 +4,24 @@ All notable changes to this project are documented here. This file is maintained
 automatically by [semantic-release](https://github.com/semantic-release/semantic-release)
 on every release to `main`.
 
+## [1.9.0](https://github.com/bauer-group/CS-BackupHelper/compare/v1.8.0...v1.9.0) (2026-10-09)
+
+### 🚀 Features
+
+* **s3:** added TLS verification settings for s3 endpoints ([ed06a3d](https://github.com/bauer-group/CS-BackupHelper/commit/ed06a3de867148af46aedd3478b67feab128cf8f))
+* **sources:** added an opt-in to keep postgres privileges ([ad65bd9](https://github.com/bauer-group/CS-BackupHelper/commit/ad65bd963fb012eea776ce3e9c072c834e4ba1e3))
+
+### 🐛 Bug Fixes
+
+* **sources:** dumped mysql 26+ routines in a second pass ([182dd13](https://github.com/bauer-group/CS-BackupHelper/commit/182dd13a47c43fc146f23ab47feef3edf5befcf2))
+* **sources:** failed the MySQL 26+ dump on unreadable routines ([ec6f227](https://github.com/bauer-group/CS-BackupHelper/commit/ec6f227a61ca1436bf3aa6573698897a6b906617))
+* **sources:** kept s3 objects whose tags cannot be read ([ef734f4](https://github.com/bauer-group/CS-BackupHelper/commit/ef734f4e40969c510ca062bf11d89e386caeb589))
+* **sources:** kept the MySQL 26+ routines pass free of table locks ([775c1c1](https://github.com/bauer-group/CS-BackupHelper/commit/775c1c1596d9ce046892e153effe7208938ca57a))
+* **sources:** preserved content headers of mirrored s3 objects ([c3b21ce](https://github.com/bauer-group/CS-BackupHelper/commit/c3b21cee7d3ee82541c1fc1baf0fef189a408a67))
+* **sources:** restored postgres dumps over partitioned tables ([d523b26](https://github.com/bauer-group/CS-BackupHelper/commit/d523b26fc7be15214db9096023415ed706f2dbd1))
+* **sources:** shipped the client authentication plugins ([522ccb2](https://github.com/bauer-group/CS-BackupHelper/commit/522ccb22e36e9f2bfc66307cfb2917fd4c3c8802))
+* **sources:** url-encoded s3 object tags on restore ([10c99d7](https://github.com/bauer-group/CS-BackupHelper/commit/10c99d7402c3b075ea07659ce0ba7662c8f7d151))
+
 ## [1.8.0](https://github.com/bauer-group/CS-BackupHelper/compare/v1.7.7...v1.8.0) (2026-10-09)
 
 ### 🚀 Features
