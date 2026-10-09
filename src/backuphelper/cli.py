@@ -31,6 +31,7 @@ from .runner import (
     restore_snapshot,
     run_job,
 )
+from .snapshots import job_slug, parse_snapshot_id, scope_for
 from .state import record_daemon_start
 
 app = typer.Typer(add_completion=False, help="BAUER GROUP central backup engine")
@@ -42,17 +43,17 @@ def data_dir() -> Path:
     return Path(os.environ.get("BACKUP_DATA_DIR", "/data"))
 
 
-def _run_one(job: Job, instance_name: str, dd: Path) -> JobResult:
+def _run_one(job: Job, cfg: RootConfig, dd: Path) -> JobResult:
     notifier = AlertManager(job.notifications)
-    return run_job(job, data_dir=dd, instance_name=instance_name, notifier=notifier,
-                   hooks=discover_hooks())
+    return run_job(job, data_dir=dd, instance_name=cfg.instance_name, notifier=notifier,
+                   hooks=discover_hooks(), scope=scope_for(cfg.jobs, job))
 
 
 def run_all_now(cfg: RootConfig, dd: Path) -> int:
     """Run every job once. Exit code 1 if any job ended in error."""
     worst_ok = True
     for job in cfg.jobs:
-        result = _run_one(job, cfg.instance_name, dd)
+        result = _run_one(job, cfg, dd)
         worst_ok = worst_ok and result.status != "error"
     return 0 if worst_ok else 1
 
@@ -95,7 +96,7 @@ def run_daemon(cfg: RootConfig, dd: Path) -> None:
     for job in cfg.jobs:
         def _job(job: Job = job) -> None:
             try:
-                _run_one(job, cfg.instance_name, dd)
+                _run_one(job, cfg, dd)
             except Exception:  # noqa: BLE001 - never let one run kill the daemon
                 log.exception("scheduled run for job %s failed", job.name)
 
@@ -142,10 +143,11 @@ def list_cmd(job: Optional[str] = typer.Option(None, "--job")) -> None:
     if not sizes:
         typer.echo("no snapshots found")
         return
+    width = max([24] + [len(sid) for sid in sizes])  # job-scoped ids are longer
     for sid in sorted(sizes):
         size = sizes[sid]
         where = "" if size else "  (off-site only)"
-        typer.echo(f"{sid:24s} {size:>12d} bytes{where}")
+        typer.echo(f"{sid:{width}s} {size:>12d} bytes{where}")
 
 
 @app.command()
@@ -162,7 +164,7 @@ def show(snapshot_id: str) -> None:
 def verify(snapshot_id: str, job: Optional[str] = typer.Option(None, "--job")) -> None:
     """Verify a snapshot's archive against its manifest sha256 (pulls it from the
     off-site S3 target first if it is not on the local volume)."""
-    target = _pick_job(load_config(), job)
+    target = _pick_job(load_config(), job, snapshot_id)
     if target is not None:
         _hydrate_from_destinations(target, data_dir(), snapshot_id)
     if verify_snapshot(data_dir(), snapshot_id):
@@ -172,12 +174,17 @@ def verify(snapshot_id: str, job: Optional[str] = typer.Option(None, "--job")) -
     raise typer.Exit(2)
 
 
-def _pick_job(cfg: RootConfig, job_name: Optional[str]) -> Optional[Job]:
+def _pick_job(cfg: RootConfig, job_name: Optional[str],
+              snapshot_id: Optional[str] = None) -> Optional[Job]:
+    """The job named by --job; without it the job a job-scoped snapshot id
+    names, else the first job."""
     if not cfg.jobs:
         return None
-    if job_name is None:
-        return cfg.jobs[0]
-    return next((j for j in cfg.jobs if j.name == job_name), None)
+    if job_name is not None:
+        return next((j for j in cfg.jobs if j.name == job_name), None)
+    _, slug = parse_snapshot_id(snapshot_id) if snapshot_id else (None, None)
+    owner = next((j for j in cfg.jobs if slug is not None and job_slug(j.name) == slug), None)
+    return owner or cfg.jobs[0]
 
 
 @app.command()
@@ -187,7 +194,7 @@ def restore(snapshot_id: str,
             only: Optional[list[str]] = typer.Option(None, "--only", help="restore only these components")) -> None:
     """Restore a snapshot (DESTRUCTIVE — overwrites the live sources)."""
     setup_logging()
-    target = _pick_job(load_config(), job)
+    target = _pick_job(load_config(), job, snapshot_id)
     if target is None:
         typer.echo("no matching job configured")
         raise typer.Exit(1)
