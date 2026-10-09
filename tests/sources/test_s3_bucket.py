@@ -83,3 +83,72 @@ def test_empty_bucket_produces_component_with_zero_objects(tmp_path):
     comp = S3BucketSource(_spec("empty")).produce(tmp_path)[0]
     meta = _read_tar_json(comp.path, "metadata.json")
     assert meta["object_count"] == 0
+
+
+# Outline serves attachments of unsafe types with "Content-Disposition: attachment"
+# so a browser downloads them instead of rendering them: losing the header on a
+# restore turns an uploaded HTML/SVG file into a page rendered on Outline's origin.
+CONTENT_HEADERS = {
+    "ContentDisposition": 'attachment; filename="report 2026.html"',
+    "CacheControl": "private, max-age=600",
+    "ContentEncoding": "identity",
+    "ContentLanguage": "de-DE",
+}
+
+
+@mock_aws
+def test_mirror_captures_the_content_headers(tmp_path):
+    c = _client()
+    c.create_bucket(Bucket="src", CreateBucketConfiguration={"LocationConstraint": REGION})
+    c.put_object(Bucket="src", Key="att/report.html", Body=b"<h1>x</h1>",
+                 ContentType="text/html", **CONTENT_HEADERS)
+    c.put_object(Bucket="src", Key="plain.txt", Body=b"x")
+
+    comp = S3BucketSource(_spec("src")).produce(tmp_path)[0]
+
+    objects = {o["key"]: o for o in _read_tar_json(comp.path, "metadata.json")["objects"]}
+    report = objects["att/report.html"]
+    assert report["content_disposition"] == CONTENT_HEADERS["ContentDisposition"]
+    assert report["cache_control"] == CONTENT_HEADERS["CacheControl"]
+    assert report["content_encoding"] == CONTENT_HEADERS["ContentEncoding"]
+    assert report["content_language"] == CONTENT_HEADERS["ContentLanguage"]
+    # An object without the headers records them as absent, not as empty strings.
+    assert objects["plain.txt"]["content_disposition"] is None
+
+
+@mock_aws
+def test_restore_reapplies_the_content_headers(tmp_path):
+    c = _client()
+    c.create_bucket(Bucket="src", CreateBucketConfiguration={"LocationConstraint": REGION})
+    c.put_object(Bucket="src", Key="att/report.html", Body=b"<h1>x</h1>",
+                 ContentType="text/html", **CONTENT_HEADERS)
+    produced = S3BucketSource(_spec("src")).produce(tmp_path)[0]
+    extracted = tmp_path / "extracted"
+    with tarfile.open(produced.path, "r:gz") as tar:
+        tar.extractall(extracted, filter="data")
+    c.create_bucket(Bucket="dst", CreateBucketConfiguration={"LocationConstraint": REGION})
+
+    S3BucketSource(_spec("dst")).restore(extracted)
+
+    head = c.head_object(Bucket="dst", Key="att/report.html")
+    assert head["ContentType"] == "text/html"
+    for header, value in CONTENT_HEADERS.items():
+        assert head[header] == value, header
+
+
+@mock_aws
+def test_restore_of_a_snapshot_without_content_headers(tmp_path):
+    # metadata.json written before the headers were captured has no such keys.
+    staged = tmp_path / "staged"
+    (staged / "objects").mkdir(parents=True)
+    (staged / "objects" / "a.txt").write_bytes(b"old")
+    (staged / "metadata.json").write_text(json.dumps({"objects": [
+        {"key": "a.txt", "content_type": "text/plain", "metadata": {}, "tags": {}}]}))
+    c = _client()
+    c.create_bucket(Bucket="dst", CreateBucketConfiguration={"LocationConstraint": REGION})
+
+    S3BucketSource(_spec("dst")).restore(staged)
+
+    head = c.head_object(Bucket="dst", Key="a.txt")
+    assert head["ContentType"] == "text/plain"
+    assert "ContentDisposition" not in head
