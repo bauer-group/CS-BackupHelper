@@ -128,13 +128,50 @@ def test_overrides_never_reformat_numeric_looking_text():
                                 BACKUP_JOBS__0__SCHEDULE__HOUR="3",
                                 BACKUP_JOBS__0__SCHEDULE__MINUTE="05",
                                 BACKUP_JOBS__0__SOURCES__0__LABEL="1e5",
-                                BACKUP_JOBS__0__SOURCES__0__VERSION="1.50",
-                                BACKUP_JOBS__0__ENCRYPTION__RECIPIENT="null"))
+                                BACKUP_JOBS__0__SOURCES__0__VERSION="1.50"))
     job = cfg.jobs[0]
     assert job.name == "1.50"
     assert (job.schedule.hour, job.schedule.minute) == ("3", "05")
     assert job.sources[0].model_extra["label"] == "1e5"
     assert job.sources[0].model_extra["version"] == "1.50"
+
+
+def test_a_json_quoted_override_is_unquoted_as_in_1_7_7():
+    # Up to 1.7.7 every override was parsed as JSON, so quoting it was the way
+    # to pass a numeric-looking secret as text. Such a value must keep arriving
+    # without its quotes - never as '"<digits>"'.
+    digits = "".join(str((n * 7) % 10) for n in range(1, 9))  # dummy, built at runtime
+    quoted = json.dumps(digits)
+    # A compose list entry `- BACKUP_JOBS__0__SCHEDULE__CRON="0 2 * * *"` keeps
+    # its quotes; with them left in, the cron failed to parse at startup.
+    cfg = load_config(env=_with(BACKUP_JOBS__0__NOTIFICATIONS__EMAIL__PASSWORD=quoted,
+                                BACKUP_JOBS__0__SOURCES__0__PASSWORD=quoted,
+                                BACKUP_JOBS__0__SOURCES__0__HOST='"db2"',
+                                BACKUP_JOBS__0__DESTINATIONS__0__SECRET_KEY=quoted,
+                                BACKUP_JOBS__0__NAME='"nightly"',
+                                BACKUP_JOBS__0__SCHEDULE__CRON='"0 2 * * *"',
+                                BACKUP_JOBS__0__SCHEDULE__HOUR='"3"'))
+    job = cfg.jobs[0]
+    assert job.notifications.email.password == digits
+    assert job.sources[0].model_extra["password"] == digits
+    assert job.sources[0].model_extra["host"] == "db2"
+    assert job.destinations[0].model_extra["secret_key"] == digits
+    assert job.name == "nightly" and job.schedule.hour == "3"
+    assert job.schedule.cron == "0 2 * * *"
+
+
+def test_null_clears_an_optional_field_as_in_1_7_7():
+    # `null` cleared an optional field up to 1.7.7; the quoted form is the text.
+    base = {"jobs": [{"name": "main", "schedule": {"hour": "3"},
+                      "encryption": {"recipient": "age1example"},
+                      "notifications": {"email": {"host": "smtp.example.com"}}}]}
+    cfg = load_config(env={"BACKUP_CONFIG_JSON": json.dumps(base),
+                           "BACKUP_JOBS__0__NOTIFICATIONS__EMAIL__HOST": "null",
+                           "BACKUP_JOBS__0__SCHEDULE__HOUR": "null",
+                           "BACKUP_JOBS__0__ENCRYPTION__RECIPIENT": '"null"'})
+    job = cfg.jobs[0]
+    assert job.notifications.email.host is None
+    assert job.schedule.hour is None
     assert job.encryption.recipient == "null"
 
 

@@ -231,12 +231,16 @@ A config with **one job** behaves as before — same snapshot ids, retention,
 
 - **Discrete env overrides are typed by their field**
   ([details](configuration.md#discrete-env-overrides)). A text field takes the
-  value verbatim, so `…__PASSWORD=20261006` now works instead of failing
-  validation. A source's or destination's own key gets `true` / `false` /
-  `null` and JSON arrays / objects parsed, numbers stay text; every built-in
-  source and the S3 destination convert them. A plugin source that reads a
-  number from its spec without a pydantic model now gets text when the value
-  comes from a discrete override.
+  value as written, so `…__PASSWORD=20261006` now works instead of failing
+  validation. A source's or destination's own key gets `true` / `false` and
+  JSON arrays / objects parsed, numbers stay text; every built-in source and
+  the S3 destination convert them. A plugin source that reads a number from
+  its spec without a pydantic model now gets text when the value comes from a
+  discrete override. Unchanged for every field: a value in JSON quotes is
+  unquoted, so a quoted Compose list entry such as
+  `- …__SCHEDULE__CRON="0 2 * * *"` and the 1.7.7 workaround
+  `…__PASSWORD='"20261006"'` keep working, and `null` still clears an
+  optional field.
 
 For a config with **several jobs**:
 

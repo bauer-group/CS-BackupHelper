@@ -11,7 +11,8 @@ secrets stay out of the JSON literal. This mirrors the fleet's init.json
 containers (e.g. MinIO minio-init) while adding an inline (no-host-file) path.
 
 A discrete override is typed by the field it targets (:func:`_override_kind`):
-a text field takes the value verbatim, so a numeric-looking secret stays text.
+a text field keeps a number as written, so a numeric-looking secret stays text.
+A quoted JSON string and ``null`` are read as up to 1.7.7 (:func:`_coerce`).
 """
 
 from __future__ import annotations
@@ -117,7 +118,7 @@ def _apply_overrides(base: dict[str, Any], env: Mapping[str, str]) -> None:
 
 
 # How an override value is read, by the type of the field it targets:
-_TEXT = "text"  # a str field: verbatim, so "20261006", "1e5" and "null" stay text
+_TEXT = "text"  # a str field: as written, so "20261006" and "1e5" stay text
 _JSON = "json"  # a number, bool, list or object field: parsed as JSON when it is JSON
 _OPEN = "open"  # a key the engine does not type (a source's or destination's own)
 
@@ -125,19 +126,23 @@ _OPEN = "open"  # a key the engine does not type (a source's or destination's ow
 def _coerce(value: str, kind: str = _JSON) -> Any:
     """The override value for a field of the given kind (see above).
 
-    For an open key only unambiguous JSON is parsed - true / false / null, an
-    array or an object; anything else, numbers included, stays text, because
-    the receiving model may declare text (a password, a user or bucket name)
-    and pydantic turns "5432" into 5432 where a number is declared, but never
-    20261006 back into "20261006". Every built-in source, the S3 destination
-    and the runner's "enabled" toggle read numbers given as text."""
-    if kind == _TEXT:
-        return value
+    For every kind, as up to 1.7.7: a JSON string literal is unquoted
+    ('"20261006"' gives 20261006 as text - the way to pass a numeric-looking
+    secret before overrides were typed) and ``null`` is None, which clears an
+    optional field. Beyond that a text field keeps the value as written, and an
+    open key gets only unambiguous JSON parsed - true / false, an array or an
+    object; numbers stay text, because the receiving model may declare text (a
+    password, a user or bucket name) and pydantic turns "5432" into 5432 where
+    a number is declared, but never 20261006 back into "20261006". Every
+    built-in source, the S3 destination and the runner's "enabled" toggle read
+    numbers given as text."""
     try:
         parsed = json.loads(value)
     except json.JSONDecodeError:
         return value
-    if kind == _JSON or parsed is None or isinstance(parsed, (bool, list, dict)):
+    if parsed is None or isinstance(parsed, str) or kind == _JSON:
+        return parsed
+    if kind == _OPEN and isinstance(parsed, (bool, list, dict)):
         return parsed
     return value
 
