@@ -1,9 +1,18 @@
 """Email channel: a multipart text+HTML message sent over SMTP.
 
-The SMTP class is injectable (defaulting to :class:`smtplib.SMTP`) so tests can
-substitute a recorder and assert on the built message and recipients without
-ever opening a socket. STARTTLS and authentication are applied only when the
-config asks for them.
+The SMTP classes are injectable (defaulting to :class:`smtplib.SMTP` and, for
+implicit TLS, :class:`smtplib.SMTP_SSL`) so tests can substitute a recorder and
+assert on the built message and recipients without ever opening a socket.
+STARTTLS and authentication are applied only when the config asks for them.
+
+Connection security, by config:
+
+* ``implicit_tls: true`` - TLS from the first byte (SMTPS, port 465). The
+  server certificate and host name are verified against the system CA store;
+  ``tls`` is not used, as the session is already encrypted.
+* ``tls: true`` (the default) - a plain connection upgraded with STARTTLS,
+  using smtplib's default context exactly as before implicit TLS existed.
+* ``tls: false`` - plain SMTP, for an internal relay without TLS.
 
 Every socket operation of the SMTP session is bounded by
 :data:`SMTP_TIMEOUT_SECONDS`. Without it a server that never answers - an
@@ -21,6 +30,7 @@ from __future__ import annotations
 
 import html
 import smtplib
+import ssl
 from email.message import EmailMessage
 from typing import Callable, ClassVar
 
@@ -50,9 +60,16 @@ class EmailChannel(Channel):
 
     name: ClassVar[str] = "email"
 
-    def __init__(self, cfg: EmailChannelConfig, *, smtp_factory: SmtpFactory = smtplib.SMTP):
+    def __init__(
+        self,
+        cfg: EmailChannelConfig,
+        *,
+        smtp_factory: SmtpFactory = smtplib.SMTP,
+        smtps_factory: SmtpFactory = smtplib.SMTP_SSL,
+    ):
         self.cfg = cfg
         self._smtp_factory = smtp_factory
+        self._smtps_factory = smtps_factory
 
     def send(self, event: AlertEvent) -> None:
         if not self.cfg.host:
@@ -64,14 +81,26 @@ class EmailChannel(Channel):
 
         msg = self._build_message(event)
 
-        with self._smtp_factory(
-            self.cfg.host, self.cfg.port, timeout=SMTP_TIMEOUT_SECONDS
-        ) as smtp:
-            if self.cfg.tls:
+        with self._connect() as smtp:
+            if self.cfg.tls and not self.cfg.implicit_tls:
                 smtp.starttls()
             if self.cfg.username and self.cfg.password:
                 smtp.login(self.cfg.username, self.cfg.password)
             smtp.send_message(msg)
+
+    def _connect(self) -> smtplib.SMTP:
+        """Open the SMTP session: TLS from the first byte with ``implicit_tls``,
+        otherwise a plain connection that STARTTLS may upgrade."""
+        if self.cfg.implicit_tls:
+            # smtplib's own SMTP_SSL default context checks neither the chain
+            # nor the host name; a default context checks both.
+            return self._smtps_factory(
+                self.cfg.host,
+                self.cfg.port,
+                timeout=SMTP_TIMEOUT_SECONDS,
+                context=ssl.create_default_context(),
+            )
+        return self._smtp_factory(self.cfg.host, self.cfg.port, timeout=SMTP_TIMEOUT_SECONDS)
 
     def _build_message(self, event: AlertEvent) -> EmailMessage:
         msg = EmailMessage()

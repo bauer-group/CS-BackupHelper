@@ -63,15 +63,14 @@ A channel that is listed in `channels` but lacks its required setting (an empty 
 
 ### Email
 
-Sends a multipart text + HTML message over SMTP. STARTTLS and login are applied only when configured.
-
-Each step of the SMTP session (connect, greeting, every command, the message upload) must complete within 60 seconds. A server that does not answer in time fails the email channel like any other delivery error (logged, other channels still receive the alert) instead of blocking the run. Up to 1.7.7 there was no limit: a server that never answered, such as an SMTPS port 465 waiting for a TLS handshake, blocked the run and every later scheduled run of the job.
+Sends a multipart text + HTML message over SMTP — with STARTTLS (the default), implicit TLS (SMTPS) or plain, see [connection security](#connection-security). Login is performed only when configured.
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `host` | string | `null` | SMTP server. Required — without it the channel is skipped with a warning. |
-| `port` | int | `587` | SMTP port. |
-| `tls` | bool | `true` | Issue `STARTTLS` before sending. |
+| `port` | int | `587` | SMTP port. Set `465` (or your server's SMTPS port) together with `implicit_tls`. |
+| `tls` | bool | `true` | Issue `STARTTLS` after connecting. Not used when `implicit_tls` is `true`. |
+| `implicit_tls` | bool | `false` | Speak TLS from the first byte (SMTPS, usually port `465`) instead of upgrading a plain connection with STARTTLS. Verifies the server certificate. Engines up to 1.7.7 do not know this key and ignore it. |
 | `username` | string | `null` | Login is performed only when both `username` and `password` are set. |
 | `password` | string | `null` | |
 | `sender` | string | `null` | `From` header. |
@@ -85,6 +84,35 @@ Every value the HTML part shows — title, message, instance, job, snapshot id, 
 { "channels": ["email"], "level": "warnings",
   "email": {
     "host": "smtp.example.com", "port": 587, "tls": true,
+    "username": "backup@example.com", "password": "${SMTP_PASSWORD}",
+    "sender": "backup@example.com", "recipients": ["ops@example.com"]
+  }
+}
+```
+
+#### Connection security
+
+Choose the mode the SMTP server expects on the port you use:
+
+| The server offers | Settings |
+| --- | --- |
+| STARTTLS on a submission port (usually 587) | `"port": 587, "tls": true` — the default |
+| Implicit TLS / SMTPS (usually 465) | `"port": 465, "implicit_tls": true` |
+| No TLS at all (an internal relay, usually port 25) | `"port": 25, "tls": false` |
+
+`"tls": true` keeps meaning STARTTLS, so existing configs need no change. With `implicit_tls` set, `tls` is not used: the session is encrypted before the first SMTP command. A mode that does not match the port fails the email channel instead of sending — implicit TLS against a STARTTLS port fails the TLS handshake at once (`WRONG_VERSION_NUMBER`); a plain or STARTTLS connection to an SMTPS port gets no greeting, because the server waits for a TLS handshake, and fails at the time limit below at the latest.
+
+The two TLS modes check certificates differently:
+
+- **`implicit_tls`** verifies the server certificate against the CA certificates installed in the image and checks that it is issued for `host`. A self-signed certificate, one from a private CA, or a `host` the certificate is not issued for is refused (`CERTIFICATE_VERIFY_FAILED`) before anything — the login included — is sent.
+- **STARTTLS (`tls`)** uses the default of Python's `smtplib`, unchanged from earlier releases: the session is encrypted, but the server certificate is not verified.
+
+Each step of the SMTP session (connect, TLS handshake, greeting, every command, the message upload) must complete within 60 seconds. A server that does not answer in time fails the email channel like any other delivery error (logged, other channels still receive the alert) instead of blocking the run. Up to 1.7.7 there was no limit: a server that never answered, such as an SMTPS port waiting for a TLS handshake, blocked the run and every later scheduled run of the job.
+
+```json
+{ "channels": ["email"],
+  "email": {
+    "host": "smtp.example.com", "port": 465, "implicit_tls": true,
     "username": "backup@example.com", "password": "${SMTP_PASSWORD}",
     "sender": "backup@example.com", "recipients": ["ops@example.com"]
   }
