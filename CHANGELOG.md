@@ -4,6 +4,17 @@ All notable changes to this project are documented here. This file is maintained
 automatically by [semantic-release](https://github.com/semantic-release/semantic-release)
 on every release to `main`.
 
+## [1.8.0](https://github.com/bauer-group/CS-BackupHelper/compare/v1.7.7...v1.8.0) (2026-10-09)
+
+### 🚀 Features
+
+* **notify:** added implicit TLS (SMTPS) to the email channel ([7ecdfd5](https://github.com/bauer-group/CS-BackupHelper/commit/7ecdfd5a97b21c0db5c3a9decf0491c603ffb145))
+
+### 🐛 Bug Fixes
+
+* **notify:** bounded the SMTP session of the email channel by a timeout ([f1aa554](https://github.com/bauer-group/CS-BackupHelper/commit/f1aa5542406e4c26c4bef572227a55ba329d1cf3))
+* **notify:** showed duration, size and error line breaks in HTML mails ([8e2f846](https://github.com/bauer-group/CS-BackupHelper/commit/8e2f846e30fe69b9cb1c20415249cc7d6005909d))
+
 ## [1.7.7](https://github.com/bauer-group/CS-BackupHelper/compare/v1.7.6...v1.7.7) (2026-10-08)
 
 ### 🐛 Bug Fixes

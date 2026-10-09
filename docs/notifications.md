@@ -63,19 +63,20 @@ A channel that is listed in `channels` but lacks its required setting (an empty 
 
 ### Email
 
-Sends a multipart text + HTML message over SMTP. STARTTLS and login are applied only when configured.
+Sends a multipart text + HTML message over SMTP — with STARTTLS (the default), implicit TLS (SMTPS) or plain, see [connection security](#connection-security). Login is performed only when configured.
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `host` | string | `null` | SMTP server. Required — without it the channel is skipped with a warning. |
-| `port` | int | `587` | SMTP port. |
-| `tls` | bool | `true` | Issue `STARTTLS` before sending. |
+| `port` | int | `587` | SMTP port. Set `465` (or your server's SMTPS port) together with `implicit_tls`. |
+| `tls` | bool | `true` | Issue `STARTTLS` after connecting. Not used when `implicit_tls` is `true`. |
+| `implicit_tls` | bool | `false` | Speak TLS from the first byte (SMTPS, usually port `465`) instead of upgrading a plain connection with STARTTLS. Verifies the server certificate. Engines up to 1.7.7 do not know this key and ignore it. |
 | `username` | string | `null` | Login is performed only when both `username` and `password` are set. |
 | `password` | string | `null` | |
 | `sender` | string | `null` | `From` header. |
 | `recipients` | list of string | `[]` | `To` header. Each entry may hold several addresses separated by `,` or `;` (a plain string works too); whitespace is stripped and empty entries are dropped, so `[""]` from an unset variable means *no recipients*. Required — with no address left the channel is skipped with a warning instead of sending. |
 
-The subject is `[<instance>] backup <status>: <snapshot_id>`. The body includes job, duration, size and any errors.
+The subject is `[<instance>] backup <status>: <snapshot_id>`. The body — plain-text and HTML part alike — includes the job, the run's duration and size (each only when the alert carries a value for it) and every error text. In the HTML part a multi-line error text keeps its line breaks and indentation (`white-space: pre-wrap`), e.g. the stderr lines of a failed `pg_dump`; mail clients that ignore that style show it as one wrapped paragraph. Up to 1.7.7 the HTML part showed neither duration nor size.
 
 Every value the HTML part shows — title, message, instance, job, snapshot id, status and each error text — is HTML-escaped. An error text that contains markup or `<`, `>`, `&` (a crafted file name below a filesystem source, a database or exception message) therefore appears as literal text and is never interpreted by the mail client. The plain-text part carries the same values unchanged.
 
@@ -83,6 +84,35 @@ Every value the HTML part shows — title, message, instance, job, snapshot id, 
 { "channels": ["email"], "level": "warnings",
   "email": {
     "host": "smtp.example.com", "port": 587, "tls": true,
+    "username": "backup@example.com", "password": "${SMTP_PASSWORD}",
+    "sender": "backup@example.com", "recipients": ["ops@example.com"]
+  }
+}
+```
+
+#### Connection security
+
+Choose the mode the SMTP server expects on the port you use:
+
+| The server offers | Settings |
+| --- | --- |
+| STARTTLS on a submission port (usually 587) | `"port": 587, "tls": true` — the default |
+| Implicit TLS / SMTPS (usually 465) | `"port": 465, "implicit_tls": true` |
+| No TLS at all (an internal relay, usually port 25) | `"port": 25, "tls": false` |
+
+`"tls": true` keeps meaning STARTTLS, so existing configs need no change. With `implicit_tls` set, `tls` is not used: the session is encrypted before the first SMTP command. A mode that does not match the port fails the email channel instead of sending — implicit TLS against a STARTTLS port fails the TLS handshake at once (`WRONG_VERSION_NUMBER`); a plain or STARTTLS connection to an SMTPS port gets no greeting, because the server waits for a TLS handshake, and fails at the time limit below at the latest.
+
+The two TLS modes check certificates differently:
+
+- **`implicit_tls`** verifies the server certificate against the CA certificates installed in the image and checks that it is issued for `host`. A self-signed certificate, one from a private CA, or a `host` the certificate is not issued for is refused (`CERTIFICATE_VERIFY_FAILED`) before anything — the login included — is sent.
+- **STARTTLS (`tls`)** uses the default of Python's `smtplib`, unchanged from earlier releases: the session is encrypted, but the server certificate is not verified.
+
+Each step of the SMTP session (connect, TLS handshake, greeting, every command, the message upload) must complete within 60 seconds. A server that does not answer in time fails the email channel like any other delivery error (logged, other channels still receive the alert) instead of blocking the run. Up to 1.7.7 there was no limit: a server that never answered, such as an SMTPS port waiting for a TLS handshake, blocked the run and every later scheduled run of the job.
+
+```json
+{ "channels": ["email"],
+  "email": {
+    "host": "smtp.example.com", "port": 465, "implicit_tls": true,
     "username": "backup@example.com", "password": "${SMTP_PASSWORD}",
     "sender": "backup@example.com", "recipients": ["ops@example.com"]
   }
@@ -111,6 +141,8 @@ The POST body is `application/json` with these keys (serialized with sorted keys
   "status": "success"
 }
 ```
+
+`errors` (and `metrics`) carry run data verbatim: a receiver that shows them — or `message` — in HTML, Markdown or a chat message must escape them on its side. See [run data and escaping](#run-data-and-escaping).
 
 ### Microsoft Teams
 
@@ -183,6 +215,28 @@ Pings a Healthchecks.io-style monitoring check. A `success` or `warning` outcome
 ```
 
 > Set `level` to `all` when using Healthchecks as a dead-man's switch. With the default `warnings` level, successful runs are gated out and never ping the check, so it would eventually go stale and report a false failure.
+
+## Run data and escaping
+
+Most of an alert is fixed engine text or your own config: the `status`, the title `backup <status>`, the outcome `message` (one of a few fixed sentences such as `snapshot is incomplete - a component failed`), the `instance` and `job` names from the config and the generated snapshot id. **Run data** is what the backup run itself produces, and it can contain anything a file name, a database or an exception message can contain — markup included:
+
+- `errors` — e.g. a file name below a filesystem source, a `pg_dump` stderr line, an exception message;
+- `metrics` — reserved for values from source plugins; the engine currently always sends it empty, but treat it like `errors`.
+
+Where run data goes, and in what form:
+
+| Channel | Run data sent | Form |
+| --- | --- | --- |
+| Email | `errors` | HTML part: HTML-escaped (shown as text, never as markup). Plain-text part: verbatim. |
+| Webhook | `errors`, `metrics` | JSON-encoded, **not** escaped for any markup language. |
+| Slack, Discord | none | One summary line: instance, title, message, snapshot id. |
+| Microsoft Teams | none | Title, message; instance, job and snapshot id as facts. |
+| ntfy | none | `message` as plain-text body, title as `Title` header. |
+| Healthchecks | none | `message` as body. |
+
+**Webhook receivers must escape.** JSON encoding makes the webhook body structurally safe, but every string arrives exactly as the engine produced it, `<`, `>`, `&` and quotes included. A receiver that renders `errors`, `message` or `metrics` as HTML — a dashboard, a ticket, a mail it builds — must escape them itself (e.g. Python's `html.escape()`, or a template engine with auto-escaping). The same applies when it forwards them into a format with its own markup, such as Slack `mrkdwn` (escape `&`, `<`, `>`) or Markdown.
+
+**Chat channels never carry run data.** Slack, Discord, Teams, ntfy and Healthchecks receive neither `errors` nor `metrics`, so nothing a backup run produces can inject markup, links or mentions there; the error details reach you by email or webhook only. These channels send their few fields verbatim, and the platforms do interpret markup in them — Slack link and mention syntax (`<…>`), Discord mentions and Markdown, Markdown in Teams cards. As those values come from your config, keep `instance_name` and job names plain (letters, digits, `-`, `_`, `.`).
 
 ## Webhook signing
 
