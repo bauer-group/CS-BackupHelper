@@ -35,9 +35,9 @@ Because arguments are appended after the `backuphelper` entrypoint, `docker run 
 | `TZ` | `Etc/UTC` | daemon | Timezone for cron scheduling. |
 | `BACKUP_LOG_LEVEL` | `INFO` | daemon / `--now` | Log verbosity. |
 | `BACKUP_LOG_FORMAT` | `console` | daemon / `--now` | `console` or structured JSON logging. |
-| `BACKUP_HEALTHCHECK_MAX_AGE_HOURS` | `26` | `healthcheck` | Maximum age of the last run, and the grace after the daemon start while no backup has run yet. Set it above the longest gap between two scheduled runs — e.g. `170` for a weekly schedule, see [deployment](deployment.md#choosing-backup_healthcheck_max_age_hours). |
+| `BACKUP_HEALTHCHECK_MAX_AGE_HOURS` | `26` | `healthcheck` | Maximum age of the last run, and the grace after the daemon start while no backup has run yet — for every job that does not set its own `healthcheck_max_age_hours`. Set it above the longest gap between two scheduled runs — e.g. `170` for a weekly schedule, see [deployment](deployment.md#choosing-backup_healthcheck_max_age_hours). |
 
-Config loading is uniform: the commands that need the job definition (`create`, `restore`, `prune`, `config`, and the daemon/`--now` modes) all build it through the same layered loader — discrete `BACKUP_<PATH>__…` overrides on top of inline `BACKUP_CONFIG_JSON` / `BACKUP_CONFIG_JSON_BASE64` on top of a mounted `BACKUP_CONFIG_FILE`, with `${VAR}` placeholders interpolated from the environment. See [configuration](configuration.md) for the full precedence rules and [sources](sources.md) for per-source keys. The snapshot-only commands (`list`, `show`, `verify`, `download`, `healthcheck`) read the data dir directly and need no job config.
+Config loading is uniform: the commands that need the job definition (`create`, `restore`, `prune`, `config`, and the daemon/`--now` modes) all build it through the same layered loader — discrete `BACKUP_<PATH>__…` overrides on top of inline `BACKUP_CONFIG_JSON` / `BACKUP_CONFIG_JSON_BASE64` on top of a mounted `BACKUP_CONFIG_FILE`, with `${VAR}` placeholders interpolated from the environment. See [configuration](configuration.md) for the full precedence rules and [sources](sources.md) for per-source keys. The snapshot-only commands (`show`, `download`) read the data dir directly and need no job config; `list` and `verify` use it only to reach a job's off-site S3 target, and `healthcheck` for the jobs' names and max ages (without a loadable config it judges the data dir as a whole).
 
 ## Run status
 
@@ -223,12 +223,15 @@ Exit codes: `0`.
 
 ### `healthcheck`
 
-The container `HEALTHCHECK` probe. It reports whether backups work — not only whether one is recent — and prints one line with its verdict and the reason. It is unhealthy when the data dir is not writable, when the most recent run ended in `error` or left a snapshot with a failed component, when the most recent run is older than `BACKUP_HEALTHCHECK_MAX_AGE_HOURS`, or when no backup has run within that time after the daemon started. It reads the run records in `<data dir>/.state/` and the sidecar manifests, so it also works for `keep_local: false`. The full rules are in [deployment](deployment.md#the-functional-healthcheck).
+The container `HEALTHCHECK` probe. It reports whether backups work — not only whether one is recent — and prints one line with its verdict and the reason. It is unhealthy when the data dir is not writable, when the most recent run ended in `error` or left a snapshot with a failed component, when the most recent run is older than the max age (the job's `healthcheck_max_age_hours`, else `BACKUP_HEALTHCHECK_MAX_AGE_HOURS`), or when no backup has run within that time after the daemon started. With several jobs these rules apply to **every job on its own**, and the check is unhealthy when any job is — another job's newer good run does not hide a failure. It reads the run records in `<data dir>/.state/` and the sidecar manifests, so it also works for `keep_local: false`, and the job config for the job names and max ages. The full rules are in [deployment](deployment.md#the-functional-healthcheck).
 
 ```bash
 docker compose exec backup backuphelper healthcheck
 # healthy: the last backup is fresh: snapshot 2026-07-05_03-15-00 (job main) ran 7.2 h ago
 # unhealthy: the last backup failed: snapshot 2026-07-05_03-15-00 (job main) at 2026-07-05T03:15:00+00:00: failed component(s): database
+
+# several jobs: one part per job, only the failing ones when unhealthy
+# unhealthy: job files-nightly: the last backup failed: snapshot 2026-07-05_01-00-00_files-nightly (job files-nightly) at 2026-07-05T01:00:00+00:00: the run ended in error
 ```
 
 Run it in the daemon's container (`exec`): a one-off `docker compose run --rm backup healthcheck` against a volume that no daemon has used yet reports `unhealthy: no backup has run yet and no daemon start is recorded`.
@@ -247,4 +250,4 @@ Exit codes: `0` healthy · `1` unhealthy.
 | `download` | copied | not found | — |
 | `prune` | pruned (or nothing to prune) | `--job` names no job | — |
 | `config` | always | — | — |
-| `healthcheck` | healthy | last run failed, stale, no backup after the grace, or data dir not writable | — |
+| `healthcheck` | healthy | a job's last run failed or is stale, no backup after the grace, or data dir not writable | — |

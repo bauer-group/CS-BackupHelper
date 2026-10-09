@@ -157,6 +157,9 @@ class Job(ConfigModel):
     # off-site). Without a successful off-site copy the local one is kept.
     keep_local: bool = True
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
+    # How old this job's last run may get before the container healthcheck
+    # turns unhealthy; None: BACKUP_HEALTHCHECK_MAX_AGE_HOURS (default 26).
+    healthcheck_max_age_hours: Optional[float] = Field(default=None, gt=0)
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
     encryption: EncryptionConfig = Field(default_factory=EncryptionConfig)
     notifications: NotifyConfig = Field(default_factory=NotifyConfig)
