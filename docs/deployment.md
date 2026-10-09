@@ -224,6 +224,40 @@ components and missing backups. Check these before rolling it out:
   `snapshot completed with warnings` (warnings used to read `snapshot completed
   with errors`).
 
+## Behaviour changes after 1.7.7
+
+A config with **one job** behaves as before — same snapshot ids, retention,
+`prune` and healthcheck — except for the first point:
+
+- **Discrete env overrides are typed by their field**
+  ([details](configuration.md#discrete-env-overrides)). A text field takes the
+  value verbatim, so `…__PASSWORD=20261006` now works instead of failing
+  validation. A source's or destination's own key gets `true` / `false` /
+  `null` and JSON arrays / objects parsed, numbers stay text; every built-in
+  source and the S3 destination convert them. A plugin source that reads a
+  number from its spec without a pydantic model now gets text when the value
+  comes from a discrete override.
+
+For a config with **several jobs**:
+
+- **Snapshot ids name the job**, e.g. `2026-07-05_03-15-00_files-nightly`
+  ([snapshot ids](configuration.md#snapshot-ids)). Scripts that match ids
+  with `^YYYY-MM-DD_HH-MM-SS$` must accept the `_<job>` suffix. Snapshots from
+  before the upgrade keep their plain ids and stay listable, verifiable,
+  restorable and prunable.
+- **Retention and `prune` work per job**: a job prunes only its own snapshots,
+  on the data dir and on S3 ([retention per job](retention.md#retention-applies-per-job-and-destination)).
+  Old plain snapshots count for the first job that stores in that place (a
+  fallback copy for the job its pending marker names); those of a job that is
+  no longer configured are never pruned — remove them by hand.
+  `prune` applies every job's own policy, `prune --job NAME` one job's.
+- **The healthcheck judges every job on its own**, with the job's
+  `healthcheck_max_age_hours` when set. A failed or stale job keeps the
+  container unhealthy until it runs successfully again, also when another job
+  ran later. A job that has never run turns unhealthy once the grace after the
+  daemon start is over — check that every configured job is scheduled to run
+  within its max age.
+
 ## Security posture
 
 The runtime is deliberately minimal and unprivileged:
