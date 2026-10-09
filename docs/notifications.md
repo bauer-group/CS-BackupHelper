@@ -142,6 +142,8 @@ The POST body is `application/json` with these keys (serialized with sorted keys
 }
 ```
 
+`errors` (and `metrics`) carry run data verbatim: a receiver that shows them — or `message` — in HTML, Markdown or a chat message must escape them on its side. See [run data and escaping](#run-data-and-escaping).
+
 ### Microsoft Teams
 
 Posts to a Teams incoming webhook as an Adaptive Card (v1.4, the current Teams-native format) or a legacy MessageCard.
@@ -213,6 +215,28 @@ Pings a Healthchecks.io-style monitoring check. A `success` or `warning` outcome
 ```
 
 > Set `level` to `all` when using Healthchecks as a dead-man's switch. With the default `warnings` level, successful runs are gated out and never ping the check, so it would eventually go stale and report a false failure.
+
+## Run data and escaping
+
+Most of an alert is fixed engine text or your own config: the `status`, the title `backup <status>`, the outcome `message` (one of a few fixed sentences such as `snapshot is incomplete - a component failed`), the `instance` and `job` names from the config and the generated snapshot id. **Run data** is what the backup run itself produces, and it can contain anything a file name, a database or an exception message can contain — markup included:
+
+- `errors` — e.g. a file name below a filesystem source, a `pg_dump` stderr line, an exception message;
+- `metrics` — reserved for values from source plugins; the engine currently always sends it empty, but treat it like `errors`.
+
+Where run data goes, and in what form:
+
+| Channel | Run data sent | Form |
+| --- | --- | --- |
+| Email | `errors` | HTML part: HTML-escaped (shown as text, never as markup). Plain-text part: verbatim. |
+| Webhook | `errors`, `metrics` | JSON-encoded, **not** escaped for any markup language. |
+| Slack, Discord | none | One summary line: instance, title, message, snapshot id. |
+| Microsoft Teams | none | Title, message; instance, job and snapshot id as facts. |
+| ntfy | none | `message` as plain-text body, title as `Title` header. |
+| Healthchecks | none | `message` as body. |
+
+**Webhook receivers must escape.** JSON encoding makes the webhook body structurally safe, but every string arrives exactly as the engine produced it, `<`, `>`, `&` and quotes included. A receiver that renders `errors`, `message` or `metrics` as HTML — a dashboard, a ticket, a mail it builds — must escape them itself (e.g. Python's `html.escape()`, or a template engine with auto-escaping). The same applies when it forwards them into a format with its own markup, such as Slack `mrkdwn` (escape `&`, `<`, `>`) or Markdown.
+
+**Chat channels never carry run data.** Slack, Discord, Teams, ntfy and Healthchecks receive neither `errors` nor `metrics`, so nothing a backup run produces can inject markup, links or mentions there; the error details reach you by email or webhook only. These channels send their few fields verbatim, and the platforms do interpret markup in them — Slack link and mention syntax (`<…>`), Discord mentions and Markdown, Markdown in Teams cards. As those values come from your config, keep `instance_name` and job names plain (letters, digits, `-`, `_`, `.`).
 
 ## Webhook signing
 
