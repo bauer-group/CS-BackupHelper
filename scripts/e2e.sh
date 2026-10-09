@@ -56,7 +56,18 @@ backup_now(){ $COMPOSE run --rm -e BACKUP_CONFIG_JSON="$1" backup --now 2>&1; }
 sid_of(){ grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}-[0-9]{2}' | head -1; }
 do_restore(){ $COMPOSE run --rm -e BACKUP_CONFIG_JSON="$1" backup restore "$2" --only "$3" --force 2>&1; }
 show_snapshot(){ $COMPOSE run --rm backup show "$1" 2>&1; }
-mc(){ docker run --rm --network bh-e2e --entrypoint sh minio/mc:latest -c \
+# archived <prefix> <snapshot id> <label>: the snapshot reached the MinIO bucket.
+archived(){
+  local listing; listing=$(mc "mc ls m/backups/$1/")
+  printf '%s' "$listing" | grep -q "$2" && ok "$3 archive in MinIO" || ko "$3 archive in MinIO" "$listing"
+}
+# restored <label> <restore output> <condition result>: the restore command
+# itself reported success and the data check passed.
+restored(){
+  if printf '%s' "$2" | grep -q "restore complete" && [ "$3" = 0 ]; then ok "$1"; else ko "$1" "$2"; fi
+}
+# mc from the CS-MinIO init image (the minio/mc image is no longer published).
+mc(){ docker run --rm --network bh-e2e --entrypoint sh ghcr.io/bauer-group/cs-minio/minio-init:latest -c \
         "mc alias set m http://minio:9000 admin minioadmin-dev >/dev/null 2>&1 && $1" 2>&1; }
 in_files(){ $COMPOSE run --rm --entrypoint sh backup -c "$1" 2>&1; }
 # SQL from stdin, run in the server containers with the root password from
@@ -64,6 +75,8 @@ in_files(){ $COMPOSE run --rm --entrypoint sh backup -c "$1" 2>&1; }
 psql_app(){ $COMPOSE exec -T postgres psql -U app -d app -v ON_ERROR_STOP=1 -X -q -tA "$@" 2>&1; }
 maria_sql(){ $COMPOSE exec -T mariadb sh -c \
         'exec mariadb -uroot -p"$MARIADB_ROOT_PASSWORD" --default-character-set=utf8mb4 -N app' 2>&1; }
+maria_app_sql(){ $COMPOSE exec -T mariadb sh -c \
+        'exec mariadb -u"$MARIADB_USER" -p"$MARIADB_PASSWORD" --default-character-set=utf8mb4 -N app' 2>&1; }
 mysql_sql(){ $COMPOSE exec -T mysql sh -c \
         'exec mysql -uroot --password="$MYSQL_ROOT_PASSWORD" --default-character-set=utf8mb4 -N app' 2>&1 \
         | grep -v 'Using a password on the command line'; }
@@ -131,7 +144,7 @@ SQL
 pg='{"instance_name":"e2e","jobs":[{"name":"pg","sources":[{"type":"postgres","host":"postgres","database":"app","user":"app","password":"devpassword"}],"destinations":[{"type":"local"},'"${dest/PFX/pg}"']}]}'
 out=$(backup_now "$pg"); sid=$(printf "%s" "$out" | sid_of)
 printf "%s" "$out" | grep -q "finished: success" && ok "postgres backup ($sid)" || ko "postgres backup ($sid)" "$out"
-mc "mc ls m/backups/pg/" | grep -q "$sid" && ok "postgres archive in MinIO" || ko "postgres archive in MinIO"
+archived pg "$sid" postgres
 # (a) the tables are gone (a fresh database): the plain pg_restore path
 psql_app -c "DROP TABLE demo, events;" >/dev/null
 out=$(do_restore "$pg" "$sid" app); st=$(pg_state)
@@ -161,35 +174,37 @@ out=$(do_restore "$pg_acl" "$sid" app); st=$(pg_state)
 echo "== engine: mariadb =="
 $COMPOSE exec -T mariadb mariadb -uroot -prootpw app -e \
   "DROP TABLE IF EXISTS demo; CREATE TABLE demo(id int PRIMARY KEY, name varchar(64)); INSERT INTO demo VALUES (1,'e2e-original');" 2>/dev/null
-# 4-byte UTF-8 (--default-character-set=utf8mb4) and a trigger (--triggers)
-maria_sql >/dev/null <<'SQL'
-ALTER TABLE demo CONVERT TO CHARACTER SET utf8mb4;
+# 4-byte UTF-8 (--default-character-set=utf8mb4), a trigger (--triggers) and a
+# stored procedure (--routines), created by the application user like an
+# application would: the dump keeps their DEFINER.
+extras_seed="ALTER TABLE demo CONVERT TO CHARACTER SET utf8mb4;
 INSERT INTO demo VALUES (2, 'utf8mb4 😀 ü');
 CREATE TRIGGER demo_bi BEFORE INSERT ON demo FOR EACH ROW SET NEW.name = TRIM(NEW.name);
-SQL
-# "<4-byte text intact>|<trigger present>"
+DROP PROCEDURE IF EXISTS demo_count;
+CREATE PROCEDURE demo_count(OUT n INT) SELECT COUNT(*) INTO n FROM demo;"
+echo "$extras_seed" | maria_app_sql
+# "<4-byte text intact>|<trigger present>|<procedure present>"
 extras_sql="SELECT CONCAT((SELECT name FROM demo WHERE id = 2) = 'utf8mb4 😀 ü', '|',
-  (SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = 'app' AND TRIGGER_NAME = 'demo_bi'));"
+  (SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = 'app' AND TRIGGER_NAME = 'demo_bi'), '|',
+  (SELECT COUNT(*) FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = 'app' AND ROUTINE_NAME = 'demo_count'));"
 maria='{"instance_name":"e2e","jobs":[{"name":"maria","sources":[{"type":"mariadb","host":"mariadb","database":"app","user":"app","password":"devpassword"}],"destinations":[{"type":"local"},'"${dest/PFX/maria}"']}]}'
 out=$(backup_now "$maria"); sid=$(printf "%s" "$out" | sid_of)
 printf "%s" "$out" | grep -q "finished: success" && ok "mariadb backup ($sid)" || ko "mariadb backup ($sid)" "$out"
-mc "mc ls m/backups/maria/" | grep -q "$sid" && ok "mariadb archive in MinIO" || ko "mariadb archive in MinIO"
+archived maria "$sid" mariadb
 $COMPOSE exec -T mariadb mariadb -uroot -prootpw app -e "DROP TABLE demo;" 2>/dev/null
+echo "DROP PROCEDURE demo_count;" | maria_sql >/dev/null
 out=$(do_restore "$maria" "$sid" app)
-$COMPOSE exec -T mariadb mariadb -uroot -prootpw app -N -e "SELECT name FROM demo WHERE id=1;" 2>/dev/null | grep -q "e2e-original" \
-  && ok "mariadb restore roundtrip" || ko "mariadb restore roundtrip" "$out"
+$COMPOSE exec -T mariadb mariadb -uroot -prootpw app -N -e "SELECT name FROM demo WHERE id=1;" 2>/dev/null | grep -q "e2e-original"
+restored "mariadb restore roundtrip" "$out" $?
 st=$(echo "$extras_sql" | maria_sql)
-[ "$st" = "1|1" ] && ok "mariadb restore keeps utf8mb4 text and triggers" || ko "mariadb utf8mb4 text and triggers: got '$st'"
+[ "$st" = "1|1|1" ] && ok "mariadb restore keeps utf8mb4 text, trigger and procedure" \
+  || ko "mariadb utf8mb4 text, trigger and procedure: got '$st'"
 
 # ── MySQL ────────────────────────────────────────────────────────────────────
 echo "== engine: mysql =="
 $COMPOSE exec -T mysql mysql -uroot -prootpw app -e \
   "DROP TABLE IF EXISTS demo; CREATE TABLE demo(id int PRIMARY KEY, name varchar(64)); INSERT INTO demo VALUES (1,'e2e-original');" 2>/dev/null
-mysql_sql >/dev/null <<'SQL'
-ALTER TABLE demo CONVERT TO CHARACTER SET utf8mb4;
-INSERT INTO demo VALUES (2, 'utf8mb4 😀 ü');
-CREATE TRIGGER demo_bi BEFORE INSERT ON demo FOR EACH ROW SET NEW.name = TRIM(NEW.name);
-SQL
+echo "$extras_seed" | mysql_sql
 # The engine logs in as its own user with the server's default authentication
 # (caching_sha2_password). The healthcheck keeps root's password in the
 # server's auth cache, which would let a root login skip the full
@@ -206,14 +221,15 @@ mysql=$(printf '%s' "$mysql" | sed -E 's/"user":"root","password":"[^"]*"/"user"
 echo "FLUSH PRIVILEGES;" | mysql_sql >/dev/null
 out=$(backup_now "$mysql"); sid=$(printf "%s" "$out" | sid_of)
 printf "%s" "$out" | grep -q "finished: success" && ok "mysql backup ($sid)" || ko "mysql backup ($sid)" "$out"
-mc "mc ls m/backups/mysql/" | grep -q "$sid" && ok "mysql archive in MinIO" || ko "mysql archive in MinIO"
+archived mysql "$sid" mysql
 $COMPOSE exec -T mysql mysql -uroot -prootpw app -e "DROP TABLE demo;" 2>/dev/null
-echo "FLUSH PRIVILEGES;" | mysql_sql >/dev/null
+echo "DROP PROCEDURE demo_count; FLUSH PRIVILEGES;" | mysql_sql >/dev/null
 out=$(do_restore "$mysql" "$sid" app)
-$COMPOSE exec -T mysql mysql -uroot -prootpw app -N -e "SELECT name FROM demo WHERE id=1;" 2>/dev/null | grep -q "e2e-original" \
-  && ok "mysql restore roundtrip" || ko "mysql restore roundtrip" "$out"
+$COMPOSE exec -T mysql mysql -uroot -prootpw app -N -e "SELECT name FROM demo WHERE id=1;" 2>/dev/null | grep -q "e2e-original"
+restored "mysql restore roundtrip" "$out" $?
 st=$(echo "$extras_sql" | mysql_sql)
-[ "$st" = "1|1" ] && ok "mysql restore keeps utf8mb4 text and triggers" || ko "mysql utf8mb4 text and triggers: got '$st'"
+[ "$st" = "1|1|1" ] && ok "mysql restore keeps utf8mb4 text, trigger and procedure" \
+  || ko "mysql utf8mb4 text, trigger and procedure: got '$st'"
 
 # ── Filesystem (local files) ─────────────────────────────────────────────────
 echo "== engine: filesystem =="
@@ -225,7 +241,7 @@ $COMPOSE run --rm --user 0 --entrypoint sh backup -c \
 fs='{"instance_name":"e2e","jobs":[{"name":"fs","sources":[{"type":"filesystem","name":"data","path":"/files"}],"destinations":[{"type":"local"},'"${dest/PFX/files}"']}]}'
 out=$(backup_now "$fs"); sid=$(printf "%s" "$out" | sid_of)
 printf "%s" "$out" | grep -q "finished: success" && ok "filesystem backup ($sid)" || ko "filesystem backup ($sid)" "$out"
-mc "mc ls m/backups/files/" | grep -q "$sid" && ok "filesystem archive in MinIO" || ko "filesystem archive in MinIO"
+archived files "$sid" filesystem
 in_files "rm -rf /files/note.txt /files/sub" >/dev/null 2>&1
 do_restore "$fs" "$sid" data >/dev/null 2>&1
 out=$(in_files "cat /files/note.txt; cat /files/sub/b.txt")
@@ -246,7 +262,7 @@ out=$(s3py seed) && ok "s3-source objects seeded" || ko "s3-source objects seede
 s3='{"instance_name":"e2e","jobs":[{"name":"s3","sources":[{"type":"s3","name":"assets","endpoint":"http://minio:9000","bucket":"assets","access_key":"backup-app","secret_key":"backup-secret-dev","region":"eu-central-1","force_path_style":true}],"destinations":[{"type":"local"},'"${dest/PFX/s3mirror}"']}]}'
 out=$(backup_now "$s3"); sid=$(printf "%s" "$out" | sid_of)
 printf "%s" "$out" | grep -q "finished: success" && ok "s3-source backup ($sid)" || ko "s3-source backup ($sid)" "$out"
-mc "mc ls m/backups/s3mirror/" | grep -q "$sid" && ok "s3-source archive in MinIO" || ko "s3-source archive in MinIO"
+archived s3mirror "$sid" s3-source
 s3py delete >/dev/null
 out=$(do_restore "$s3" "$sid" assets)
 check=$(s3py check) && ok "s3-source restore (bodies, content headers, metadata, tags)" \
@@ -256,7 +272,8 @@ check=$(s3py check) && ok "s3-source restore (bodies, content headers, metadata,
 # job ends in warning, and they restore without tags.
 notags_secret=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
 notags_policy='{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetObject","s3:PutObject","s3:DeleteObject"],"Resource":["arn:aws:s3:::assets/*"]},{"Effect":"Allow","Action":["s3:ListBucket","s3:GetBucketLocation"],"Resource":["arn:aws:s3:::assets"]}]}'
-out=$(mc "printf '%s' '$notags_policy' > /tmp/p.json && mc admin policy create m pNoTags /tmp/p.json && mc admin user add m backup-notags $notags_secret && mc admin policy attach m pNoTags --user backup-notags")
+out=$(mc "printf '%s' '$notags_policy' > /tmp/p.json && mc admin policy create m pNoTags /tmp/p.json && mc admin user add m backup-notags $notags_secret && mc admin policy attach m pNoTags --user backup-notags") \
+  && ok "minio user without s3:GetObjectTagging created" || ko "minio user without s3:GetObjectTagging created" "$out"
 s3_notags=$(printf '%s' "$s3" | sed -E 's/"name":"s3"/"name":"s3notags"/; s/"access_key":"[^"]*","secret_key":"[^"]*"/"access_key":"backup-notags","secret_key":"'"$notags_secret"'"/')
 out=$(backup_now "$s3_notags"); sid=$(printf "%s" "$out" | sid_of)
 printf "%s" "$out" | grep -q "finished: warning" && printf "%s" "$out" | grep -q "get_object_tagging: AccessDenied" \
