@@ -78,7 +78,7 @@ With `"keep_acl": true` the dump keeps the privileges (`GRANT`/`REVOKE` on every
 
 ## `mariadb`
 
-Logical dump of one or more MariaDB databases. A single Alpine `mariadb-client` covers MariaDB 11/12 (and MySQL 8/9) via `mariadb-dump`, with a `mysqldump` fallback. The password is passed via the `MYSQL_PWD` environment variable, never on the command line. Dumps are written as `<name>.sql.gz`. Dump flags are fixed: `--single-transaction --quick --routines --triggers --events --no-tablespaces --default-character-set=utf8mb4`.
+Logical dump of one or more MariaDB databases. A single Alpine `mariadb-client` covers MariaDB and MySQL via `mariadb-dump`, with a `mysqldump` fallback — CI round-trips MariaDB 11.4, 11.8 and 13 and MySQL 8.0, 8.4 and 26.7 through it (`scripts/e2e.sh`). The password is passed via the `MYSQL_PWD` environment variable, never on the command line. Dumps are written as `<name>.sql.gz`. Dump flags are fixed: `--single-transaction --quick --routines --triggers --events --no-tablespaces --default-character-set=utf8mb4`.
 
 | field | default | description |
 | --- | --- | --- |
@@ -118,7 +118,7 @@ The dump keeps the `DEFINER` of every trigger, view, event and routine. The rest
 
 ## `mysql`
 
-MySQL 8/9 via the same MySQL-family implementation as `mariadb`. Identical fields and mechanics — only the binary preference differs: `mysqldump` is tried first (fallback `mariadb-dump`), and restore prefers `mysql` (fallback `mariadb`). The `kind` field defaults to `"mysql"` here.
+MySQL (8.0 and later, including the 26.x calendar versions) via the same MySQL-family implementation as `mariadb`. Identical fields and mechanics — only the binary preference differs: `mysqldump` is tried first (fallback `mariadb-dump`), and restore prefers `mysql` (fallback `mariadb`). The `kind` field defaults to `"mysql"` here.
 
 ```json
 {
