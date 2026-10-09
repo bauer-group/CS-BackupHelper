@@ -69,6 +69,11 @@ class RetentionConfig(ConfigModel):
 class EncryptionConfig(ConfigModel):
     mode: Literal["none", "age", "gpg"] = "none"
     recipient: Optional[str] = None
+    # age only: the identity file (private key) a restore decrypts with. age
+    # has no default identity, so without it an age snapshot cannot be
+    # restored. Not used to create backups - the backup host needs only the
+    # recipient. gpg reads the secret key from its keyring (GNUPGHOME).
+    identity_file: Optional[str] = None
 
 
 class EmailChannelConfig(ConfigModel):

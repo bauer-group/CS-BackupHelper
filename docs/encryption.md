@@ -24,6 +24,7 @@ See the [configuration](configuration.md) reference for where `encryption` sits 
 | --- | --- | --- | --- |
 | `mode` | `none` \| `age` \| `gpg` | `none` | Encryption backend. `none` is a passthrough (archive stored as-is). |
 | `recipient` | string | `null` | The public recipient. **Required** for `age` and `gpg` — encryption raises without it. |
+| `identity_file` | string | `null` | **age only, for restores:** path to the age identity file (the private key) that `restore` decrypts with. Not needed to create backups. |
 
 - For **age**, `recipient` is an age public key (e.g. `age1qz...`).
 - For **gpg**, `recipient` is a key id, fingerprint or email present in the encrypting keyring.
@@ -39,10 +40,10 @@ The engine shells out to the CLI tools. The exact argument vectors are:
 
 | Mode | Decrypt (during restore) |
 | --- | --- |
-| `age` | `age --decrypt --output <out> <artifact>` |
+| `age` | `age --decrypt --identity <identity_file> --output <out> <artifact>` |
 | `gpg` | `gpg --batch --yes --decrypt --output <out> <artifact>` |
 
-Decryption relies on the matching **private key** being available to the tool in the environment where restore runs — the secret keyring for `gpg`, the age identity for `age`.
+Decryption relies on the matching **private key** being available to the tool in the environment where restore runs — for `gpg` the secret key in the keyring (`GNUPGHOME`, by default `~/.gnupg` of the container user), for `age` the identity file that `identity_file` names. age has no default identity: without `identity_file` the restore stops before age runs, with `cannot decrypt snapshot <id>: <artifact> is encrypted with age: set encryption.identity_file of job '<job>' …`, and nothing is restored. Up to 1.10.0 the engine called age without an identity, so it could not restore an age snapshot at all (`the file is not passphrase-encrypted, identities are required`); `age --decrypt -i <identity> -o <out> <artifact>` by hand was the only way.
 
 A tool that fails reports its own error output: in the log line, the job error and the alert, e.g. `gpg exited with 2: gpg: … encryption failed: …`. Up to 1.10.0 that output was not captured and the message ended in `: None`.
 
@@ -54,7 +55,7 @@ Restore does not need to be told the encryption mode. It selects the decrypt bac
 - `*.tar.gz.gpg` → decrypted with `gpg`
 - `*.tar.gz` → used as-is (no decryption)
 
-So `backuphelper restore <snapshot_id>` transparently decrypts an encrypted snapshot before extracting it, provided the private key is present.
+So `backuphelper restore <snapshot_id>` transparently decrypts an encrypted snapshot before extracting it, provided the private key is present — for age, through the restoring job's `identity_file`. The suffix decides, not the job's current `mode`: a job that switched from age to gpg (or to `none`) still needs `identity_file` to restore its older age snapshots.
 
 ## Failure behavior
 
@@ -82,7 +83,12 @@ Set the public key as the recipient:
 { "encryption": { "mode": "age", "recipient": "age1qz9v..." } }
 ```
 
-At restore time, `age-identity.txt` (the private identity) must be available to the `age` CLI in the restore environment.
+At restore time, mount `age-identity.txt` (the private identity) into the container that runs the restore — read-only, e.g. as a Docker secret — and point `identity_file` at it. The backup container itself needs only the recipient:
+
+```json
+{ "encryption": { "mode": "age", "recipient": "age1qz9v...",
+                  "identity_file": "/run/secrets/age-identity.txt" } }
+```
 
 ### gpg
 

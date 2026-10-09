@@ -85,7 +85,7 @@ If the artifact is encrypted, restore decrypts it automatically based on the fil
 - `.age` → decrypted with `age`
 - `.gpg` → decrypted with `gpg`
 
-The matching key material must be available to the container (the same identity/recipient used to encrypt). Configure this exactly as for backup — see [configuration](configuration.md). Plain `.tar.gz` artifacts skip this step.
+The matching private key must be available to the container that restores: for `age` the identity file that the job's `encryption.identity_file` names, for `gpg` the secret key in its keyring — see [encryption](encryption.md#what-runs-under-the-hood). A snapshot that cannot be decrypted is not restored at all: the command logs `cannot decrypt snapshot <id>: …`, prints `restore finished with errors` and exits 1, before any hook or component runs. Plain `.tar.gz` artifacts skip this step.
 
 ## Disaster-recovery walkthrough
 

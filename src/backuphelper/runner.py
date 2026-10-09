@@ -30,7 +30,7 @@ from .config.models import DestinationSpec, Job, RetentionConfig, SourceSpec
 from .destinations.base import Destination
 from .destinations.local import LocalDestination
 from .destinations.s3 import S3Destination
-from .encryption.engine import decrypt, encrypt
+from .encryption.engine import EncryptionError, decrypt, encrypt
 from .integrity.hashing import sha256_file
 from .logging_setup import redact
 from .notify.base import AlertEvent
@@ -247,7 +247,13 @@ def restore_snapshot(
 
     with tempfile.TemporaryDirectory() as td:
         work = Path(td)
-        bundle = _decrypt_if_needed(artifact, work)
+        try:
+            bundle = _decrypt_if_needed(artifact, work, job)
+        except EncryptionError as exc:
+            # Nothing was touched yet: no hook ran, no component was restored.
+            log.error("cannot decrypt snapshot %s: %s - nothing was restored", snapshot_id,
+                      _describe(exc))
+            return False
         extracted = extract_bundle(bundle, work / "extracted")
         if hooks:
             hooks.run("pre_restore", {"job": job.name, "snapshot_id": snapshot_id,
@@ -310,10 +316,17 @@ def _restore_component(spec: SourceSpec, comp: Component, extracted: Path, work:
         return False
 
 
-def _decrypt_if_needed(artifact: Path, work: Path) -> Path:
+def _decrypt_if_needed(artifact: Path, work: Path, job: Job) -> Path:
+    """The plain bundle of ``artifact``: decrypted by its suffix, whatever
+    mode the job encrypts with today. age needs the job's identity file."""
     if artifact.suffix == ".age":
+        identity = job.encryption.identity_file
+        if not identity:
+            raise EncryptionError(
+                f"{artifact.name} is encrypted with age: set encryption.identity_file of "
+                f"job {job.name!r} to the age identity file (the private key) to restore it")
         out = work / artifact.with_suffix("").name
-        return decrypt(artifact, out, mode="age")
+        return decrypt(artifact, out, mode="age", identity=identity)
     if artifact.suffix == ".gpg":
         out = work / artifact.with_suffix("").name
         return decrypt(artifact, out, mode="gpg")
