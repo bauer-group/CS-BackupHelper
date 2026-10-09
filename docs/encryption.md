@@ -27,7 +27,7 @@ See the [configuration](configuration.md) reference for where `encryption` sits 
 | `identity_file` | string | `null` | **age only, for restores:** path to the age identity file (the private key) that `restore` decrypts with. Not needed to create backups. |
 
 - For **age**, `recipient` is an age public key (e.g. `age1qz...`).
-- For **gpg**, `recipient` is a key id, fingerprint or email present in the encrypting keyring.
+- For **gpg**, `recipient` is a key id, fingerprint or email present in the encrypting keyring. The key is used as configured, without asking the keyring whether it is valid (`--trust-model always`), so a public key that was only imported works; name it by its **full fingerprint**, so no other key in the keyring can match. Up to 1.10.0 gpg refused such a key (`There is no assurance this key belongs to the named user … Unusable public key`) unless it had been signed or given ownertrust, and every snapshot was stored UNENCRYPTED.
 
 ## What runs under the hood
 
@@ -36,7 +36,7 @@ The engine shells out to the CLI tools. The exact argument vectors are:
 | Mode | Encrypt | Resulting suffix |
 | --- | --- | --- |
 | `age` | `age --encrypt --recipient <recipient> --output <out> <archive>` | `.age` |
-| `gpg` | `gpg --batch --yes --encrypt --recipient <recipient> --output <out> <archive>` | `.gpg` |
+| `gpg` | `gpg --batch --yes --trust-model always --encrypt --recipient <recipient> --output <out> <archive>` | `.gpg` |
 
 | Mode | Decrypt (during restore) |
 | --- | --- |
@@ -92,10 +92,15 @@ At restore time, mount `age-identity.txt` (the private identity) into the contai
 
 ### gpg
 
-Use an existing keypair, or generate one, then point `recipient` at a key present in the keyring:
+Use an existing keypair, or generate one, then point `recipient` at a key present in the keyring. The backup container needs only the **public** key — import it into the keyring of the container user (`GNUPGHOME`, by default `/app/.gnupg`), e.g. from a mounted file:
+
+```bash
+gpg --batch --import /run/secrets/backup-public.asc
+gpg --with-colons --list-keys | awk -F: '/^fpr/ {print $10; exit}'   # its fingerprint
+```
 
 ```json
-{ "encryption": { "mode": "gpg", "recipient": "ops@example.com" } }
+{ "encryption": { "mode": "gpg", "recipient": "<full fingerprint>" } }
 ```
 
 The corresponding secret key must be in the keyring of whatever runs `backuphelper restore`.

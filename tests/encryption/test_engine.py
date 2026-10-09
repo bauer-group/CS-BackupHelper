@@ -63,10 +63,16 @@ def test_gpg_encrypt_builds_expected_argv_and_returns_out(tmp_path):
     result = encrypt(src, out, mode="gpg", recipient="key@example.com", run=fake)
 
     assert result == out
+    # --trust-model always: the configured recipient is used as configured.
+    # Without it gpg refuses a public key that was only imported - the usual
+    # setup of a backup host that must not hold the secret key - with
+    # "Unusable public key", and every snapshot was stored UNENCRYPTED.
     assert fake.argv == [
         "gpg",
         "--batch",
         "--yes",
+        "--trust-model",
+        "always",
         "--encrypt",
         "--recipient",
         "key@example.com",

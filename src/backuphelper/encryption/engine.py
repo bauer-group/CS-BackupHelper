@@ -55,10 +55,16 @@ def encrypt(
         _run_checked(argv, run)
         return out
     if mode == "gpg":
+        # The recipient is the operator's explicit choice, so its key is used
+        # as configured: without --trust-model always, gpg refuses a public
+        # key that was only imported ("Unusable public key") - the usual setup
+        # of a backup host that holds no secret key and no web of trust.
         argv = [
             "gpg",
             "--batch",
             "--yes",
+            "--trust-model",
+            "always",
             "--encrypt",
             "--recipient",
             recipient,
