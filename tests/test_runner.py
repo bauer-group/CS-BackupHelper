@@ -166,6 +166,23 @@ def test_a_completely_failed_component_fails_the_run(tmp_path, monkeypatch, kind
     assert run_all_now(RootConfig(jobs=[job]), data) == 1
 
 
+def test_a_source_that_reports_its_failure_logs_why(tmp_path, caplog):
+    # Regression: only a source that raised was logged. One that returns its
+    # failure - a failed pg_dump, an S3 source that cannot reach its bucket, a
+    # missing path - left nothing but "finished: error" in the log; the reason
+    # was only in the manifest and the alert (seen in the TLS e2e suite).
+    job = Job.model_validate({
+        "name": "main",
+        "sources": [{"type": "filesystem", "name": "gone", "path": str(tmp_path / "missing")}],
+    })
+    with caplog.at_level("ERROR", logger="backuphelper.runner"):
+        result = run_job(job, data_dir=tmp_path / "data", instance_name="i", now=NOW,
+                         snapshot_id="f1")
+    assert result.status == "error"
+    assert any(r.levelname == "ERROR" and "source gone (filesystem) failed" in r.getMessage()
+               and "path not found" in r.getMessage() for r in caplog.records)
+
+
 def test_a_component_without_output_is_a_failed_component(tmp_path, monkeypatch):
     # A source that returns a component with neither a file nor an error text
     # produced nothing: it was recorded with error=None, so restore and every

@@ -444,6 +444,9 @@ def _produce(job: Job, staging: Path, errors: list[str]) -> list[Component]:
                 # No file is a failure even without an error text: the component
                 # holds no data, so it must not pass as a good (restorable) one.
                 error = redact(sc.error) if sc.error else "no output"
+                # Logged like a raising source: the run log must say why the
+                # run ends in error, not only the manifest and the alert.
+                log.error("source %s (%s) failed: %s", sc.name, sc.kind, error)
                 errors.append(f"{sc.name}: {error}")
                 components.append(Component(name=sc.name, kind=sc.kind, size=0, sha256="",
                                             error=error, metadata=sc.metadata))
