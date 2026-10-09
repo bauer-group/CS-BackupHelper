@@ -15,6 +15,7 @@
 #
 # TLS services and the backup service mount .e2e-pki/ (read-only, /pki): a CA
 # and server certificate scripts/e2e.sh generates per run, never committed.
+# The encryption suite keeps the keys it generates in the volume e2e-keys.
 #
 # The `backup` service carries no fixed config; the script passes a per-engine
 # BACKUP_CONFIG_JSON via `docker compose run -e`. The database images below are
@@ -208,6 +209,7 @@ services:
       - e2e-data:/data
       - e2e-files:/files
       - ./.e2e-pki:/pki:ro
+      - e2e-keys:/keys    # encryption suite: age identity and gpg keyrings of the run
     networks: [e2e]
 
 configs:
@@ -242,3 +244,4 @@ networks:
 volumes:
   e2e-data:
   e2e-files:
+  e2e-keys:
