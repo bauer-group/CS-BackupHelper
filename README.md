@@ -113,7 +113,22 @@ Tests are a hard build gate: the production image cannot be built unless
 `pytest` passes (multi-stage `COPY --from=test`).
 
 `scripts/e2e.sh` runs real backup → restore round trips through the built
-image against PostgreSQL, MariaDB, MySQL, MinIO and a filesystem tree
-(Docker required). CI runs it on every pull request and before every release,
-against the server versions of `docker-compose.e2e.yml`, the LTS lines and the
-newest releases.
+image (Docker and openssl required), in suites under `scripts/e2e/`:
+
+| Suite | What it proves against real servers |
+| --- | --- |
+| `engines` (default) | PostgreSQL (incl. a non-superuser owner), MariaDB and MySQL (incl. least-privilege users), filesystem and S3-bucket sources, local + MinIO |
+| `alerts` | every alert channel delivered to an HTTP receiver and to SMTP servers with STARTTLS and SMTPS; levels, run-data escaping, time limits |
+| `multijob` | two jobs in one data dir under the daemon: job-scoped ids, per-job retention, prune and healthcheck |
+| `tls` | S3 destination and source on MinIO over HTTPS with a private CA (`ca_bundle`, `verify_tls`, hydration) |
+| `encryption` | age and gpg: encrypted backup, verify, restore, the UNENCRYPTED fallback |
+
+```bash
+bash scripts/e2e.sh                  # engines
+bash scripts/e2e.sh alerts tls       # named suites; "all" runs every suite
+```
+
+CI runs each suite in its own leg on every pull request and before every
+release - the engines suite against the server versions of
+`docker-compose.e2e.yml`, the LTS lines, MariaDB 11.8 and the newest releases -
+and builds and tests the image natively on arm64 as well.

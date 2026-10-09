@@ -12,6 +12,8 @@ What each status means is listed under [run status](cli.md#run-status). Since 1.
 
 See the [configuration](configuration.md) reference for how the `notifications` block sits inside a job.
 
+CI delivers every channel to real receivers on each pull request (`scripts/e2e.sh alerts`): an HTTP receiver that checks the webhook signature and the Teams, Slack, Discord, ntfy and Healthchecks payloads, and two SMTP servers — STARTTLS and SMTPS, login required — with a certificate from a private CA. It checks the level gating, the escaping of run data, the refusal of an SMTPS certificate the engine does not trust and the time limit for a receiver that never answers.
+
 ## The `notifications` block
 
 ```json
@@ -106,7 +108,7 @@ Choose the mode the SMTP server expects on the port you use:
 
 The two TLS modes check certificates differently:
 
-- **`implicit_tls`** verifies the server certificate against the CA certificates installed in the image and checks that it is issued for `host`. A self-signed certificate, one from a private CA, or a `host` the certificate is not issued for is refused (`CERTIFICATE_VERIFY_FAILED`) before anything — the login included — is sent.
+- **`implicit_tls`** verifies the server certificate against the CA certificates installed in the image and checks that it is issued for `host`. A self-signed certificate, one from a private CA, or a `host` the certificate is not issued for is refused (`CERTIFICATE_VERIFY_FAILED`) before anything — the login included — is sent. To trust a private CA, mount a PEM file with its certificate and set the container's `SSL_CERT_FILE` environment variable to it. The file *replaces* the image's CA store for every connection the engine verifies against it — the HTTP alert channels included — so add the public CAs (`/etc/ssl/certs/ca-certificates.crt`) to it when other channels post to public endpoints.
 - **STARTTLS (`tls`)** uses the default of Python's `smtplib`, unchanged from earlier releases: the session is encrypted, but the server certificate is not verified.
 
 Each step of the SMTP session (connect, TLS handshake, greeting, every command, the message upload) must complete within 60 seconds. A server that does not answer in time fails the email channel like any other delivery error (logged, other channels still receive the alert) instead of blocking the run. Up to 1.7.7 there was no limit: a server that never answered, such as an SMTPS port waiting for a TLS handshake, blocked the run and every later scheduled run of the job.

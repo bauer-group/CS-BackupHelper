@@ -4,7 +4,7 @@ How to restore a BackupHelper snapshot end to end — pick it, verify it, then r
 
 `restore` reverses the backup pipeline for one snapshot:
 
-1. **Locate** the artifact (`<id>.tar.gz`, optionally `.age`/`.gpg`) and its sidecar manifest (`<id>.manifest.json`) in the data dir. Both must be present.
+1. **Locate** the artifact (`<id>.tar.gz`, optionally `.age`/`.gpg`) and its sidecar manifest (`<id>.manifest.json`) in the data dir. When they are not there, both are fetched from the first S3 destination of the job that holds them (off-site hydration); without both, nothing is restored.
 2. **Auto-decrypt** the artifact if it ends in `.age` or `.gpg` (see [Encryption](#encryption)).
 3. **Extract** the outer bundle into a temporary work dir.
 4. **Replay each component** listed in the manifest onto its matching configured source. Components that errored during backup, or that you excluded with `--only`, are skipped. A component with no matching source config in the selected job is logged and skipped.
@@ -119,11 +119,11 @@ docker compose start app
 
 If only one component was damaged, scope the restore with `--only` (e.g. `--only database`) so you don't needlessly overwrite the healthy filesystem tree.
 
-If the snapshot is only available off-site, first copy the archive **and** its `.manifest.json` into the data volume, then start at step 4.
+If the snapshot is only available off-site (`list` marks it `(off-site only)`), `verify` and `restore` first fetch the archive **and** its `.manifest.json` from the job's S3 destination into the data volume, so the steps stay the same; pass `--job` when the id does not name the job. A copy you placed into the data volume by hand is used as it is.
 
 ## Limitations and caveats
 
-- **Validate DB restore against staging first.** The database restore paths (Postgres `pg_restore`/`psql`, MariaDB/MySQL client replay) are covered by unit tests and by real-server round trips in CI (`scripts/e2e.sh`: PostgreSQL 18 incl. partitioned tables and grants; MariaDB and MySQL in their LTS lines 11.4 and 8.4, their newest releases and the versions in `docker-compose.e2e.yml`), but have not been proven against a production-scale live database. Before relying on them for a real recovery, rehearse the full restore against a **staging** copy of the target DB and confirm the data and schema come back intact.
+- **Validate DB restore against staging first.** The database restore paths (Postgres `pg_restore`/`psql`, MariaDB/MySQL client replay) are covered by unit tests and by real-server round trips in CI (`scripts/e2e.sh`: PostgreSQL 18 incl. partitioned tables and grants, as a superuser and as the database owner; MariaDB and MySQL in their LTS lines 11.4 and 8.4, MariaDB 11.8, their newest releases and the versions in `docker-compose.e2e.yml`, each also with a least-privilege backup user; restores of age- and gpg-encrypted snapshots and of snapshots fetched from S3 over HTTPS; the database and encrypted round trips run on arm64 as well), but have not been proven against a production-scale live database. Before relying on them for a real recovery, rehearse the full restore against a **staging** copy of the target DB and confirm the data and schema come back intact.
 - **Filesystem restore is additive.** It overwrites and adds files but never deletes stray files already on disk. For a byte-exact tree, restore into an empty/clean target path.
 - **`env` is never auto-applied.** Environment variables are captured for reference only; you must re-apply them yourself.
 - **Restore refuses a corrupt archive.** It re-checks `archive_sha256` before decrypting and stops on a mismatch. Still run `verify` first, so a bad snapshot shows up before the application is stopped.
