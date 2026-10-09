@@ -54,6 +54,9 @@ _ROUTINES_ONLY_FLAGS = (
     "--force",
 )
 _PACKAGE_QUERY = re.compile(r"Couldn't execute 'SHOW PACKAGE (BODY )?STATUS")
+# What the client prints that is no error: its TLS notice when the password
+# comes from MYSQL_PWD, and the old-name notice when it runs as mysqldump.
+_CLIENT_NOTICE = re.compile(r"^(\S+: )?(warning|notice)\b|deprecated program name", re.I)
 _EX_MYSQLERR = 2  # mariadb-dump's exit code after an SQL error
 
 
@@ -110,11 +113,17 @@ def needs_separate_routines(server_version: str) -> bool:
 
 
 def only_package_errors(result: subprocess.CompletedProcess) -> bool:
-    """A routines-only pass that failed solely on the MariaDB package query."""
-    lines = (result.stderr or b"").decode("utf-8", "replace").splitlines()
+    """A routines-only pass that failed solely on the MariaDB package query.
+
+    Fails closed: with --force, mariadb-dump reports a problem and goes on, and
+    not every report says "error" — a routine whose body the user may not read
+    "has insufficient privileges" and is left out. So every stderr line other
+    than the package query and the client's notices counts as an error."""
+    lines = [line for line in (result.stderr or b"").decode("utf-8", "replace").splitlines()
+             if line.strip()]
     package = [line for line in lines if _PACKAGE_QUERY.search(line)]
-    other = [line for line in lines if not _PACKAGE_QUERY.search(line)
-             and ("error" in line.lower() or "couldn't" in line.lower())]
+    other = [line for line in lines
+             if not _PACKAGE_QUERY.search(line) and not _CLIENT_NOTICE.search(line)]
     return result.returncode == _EX_MYSQLERR and bool(package) and not other
 
 
