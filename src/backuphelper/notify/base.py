@@ -18,13 +18,22 @@ from typing import Callable, ClassVar, Mapping
 # inject a recording stand-in so no real socket is ever opened.
 Transport = Callable[[str, bytes, Mapping[str, str]], None]
 
+# Upper bound for connecting to an HTTP receiver and for each wait on its
+# answer. Without it a receiver that accepts the request and never answers
+# (a hanging endpoint or proxy) blocks the run that sends the alert - and with
+# it every later scheduled run of the job - indefinitely; the email channel
+# has the same kind of bound (email.SMTP_TIMEOUT_SECONDS).
+HTTP_TIMEOUT_SECONDS = 30
+
 
 def http_post(url: str, data: bytes, headers: Mapping[str, str]) -> None:
-    """POST ``data`` to ``url`` with ``headers``. Raises on any HTTP/URL error."""
+    """POST ``data`` to ``url`` with ``headers``. Raises on any HTTP/URL error,
+    and when the receiver does not answer within :data:`HTTP_TIMEOUT_SECONDS`."""
     request = urllib.request.Request(
         url, data=data, headers=dict(headers), method="POST"
     )
-    with urllib.request.urlopen(request):  # nosec B310 - operator-configured URL
+    # nosec B310 - operator-configured URL
+    with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS):
         pass
 
 
