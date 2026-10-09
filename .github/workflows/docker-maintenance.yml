@@ -26,4 +26,7 @@ jobs:
     with:
       merge-method: 'squash'
       auto-approve: true
+      # Merge only after this PR CI has passed on the PR head commit - it
+      # runs the tests and the backup round trips and builds the image.
+      required-workflows: '.github/workflows/docker-release.yml'
     secrets: inherit
