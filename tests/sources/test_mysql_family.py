@@ -188,6 +188,39 @@ def test_a_routines_failure_without_the_package_error_fails_the_dump(tmp_path):
     assert c.path is None and "lost connection" in c.error
 
 
+# What the client prints besides errors: the TLS notice when the password comes
+# from MYSQL_PWD (include/sslopt-vars.h) and the old-name notice when it runs as
+# mysqldump (mysys/my_init.c).
+TLS_NOTICE = (b"WARNING: option --ssl-verify-server-cert is disabled, because of an "
+              b"insecure passwordless login.\n")
+NAME_NOTICE = (b"mysqldump: Deprecated program name. It will be removed in a future "
+               b"release, use '/usr/bin/mariadb-dump' instead\n")
+
+
+def test_the_client_notices_do_not_fail_the_routines_pass(tmp_path):
+    c = _mysql(_ServerRun(routines_stderr=TLS_NOTICE + NAME_NOTICE + PACKAGE_ERROR)
+               ).produce(tmp_path)[0]
+    assert c.error is None
+
+
+# With --force, mariadb-dump reports a problem and goes on, and not every report
+# says "error": a routine whose body the user may not read (MySQL shows it only
+# to its definer and to holders of SHOW_ROUTINE or global SELECT) is reported as
+# "insufficient privileges" and left out of the dump.
+@pytest.mark.parametrize("report", [
+    b"mysqldump: bk@% has insufficient privileges to SHOW CREATE PROCEDURE `demo_count`!\n",
+    b"mysqldump: Got error: 1044: \"Access denied for user 'bk'@'%' to database 'app'\" "
+    b"when using LOCK TABLES\n",
+    b"mysqldump: Failed to start transaction on connection ID 12\n",
+])
+def test_any_other_report_in_the_routines_pass_fails_the_dump(tmp_path, report):
+    c = _mysql(_ServerRun(routines_stderr=TLS_NOTICE + report + PACKAGE_ERROR)
+               ).produce(tmp_path)[0]
+    assert c.path is None
+    assert report.decode().split(": ", 1)[1].strip() in c.error
+    assert list(tmp_path.iterdir()) == []
+
+
 @pytest.mark.parametrize("version,version_rc", [
     (b"8.4.11\n", 0), (b"11.8.9-MariaDB-ubu2404\n", 0), (b"", 1),
 ])
