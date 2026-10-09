@@ -7,10 +7,17 @@
 # destroyed, restored and asserted. The backups and restores run in the engine
 # image itself, so they use its own clients (pg_dump/pg_restore,
 # mariadb-dump/mariadb).
+#
+# E2E_MINIO=0 runs the suite without MinIO, for a platform the CS-MinIO images
+# are not published for (linux/arm64): the S3 destination then has no bucket,
+# which the engine skips as "not configured", and the MinIO checks and the
+# S3-bucket source are reported as skipped.
 # =============================================================================
 
+E2E_MINIO="${E2E_MINIO:-1}"
 # archived <prefix> <snapshot id> <label>: the snapshot reached the MinIO bucket.
 archived(){
+  if [ "$E2E_MINIO" = 0 ]; then skip "$3 archive in MinIO (E2E_MINIO=0)"; return; fi
   local listing; listing=$(mc "mc ls m/backups/$1/")
   printf '%s' "$listing" | grep -q "$2" && ok "$3 archive in MinIO" || ko "$3 archive in MinIO" "$listing"
 }
@@ -32,10 +39,15 @@ mysql_sql(){ $COMPOSE exec -T mysql sh -c \
         | grep -v 'Using a password on the command line'; }
 
 dest='{"type":"s3","endpoint":"http://minio:9000","bucket":"backups","access_key":"backup-app","secret_key":"backup-secret-dev","region":"eu-central-1","force_path_style":true,"ensure_bucket":false,"prefix":"PFX/"}'
+[ "$E2E_MINIO" = 0 ] && dest='{"type":"s3","bucket":""}'
 
 # ── bring up infra ───────────────────────────────────────────────────────────
 echo "== start infra =="
-$COMPOSE up -d postgres mariadb mysql minio minio-init >/dev/null 2>&1
+if [ "$E2E_MINIO" = 0 ]; then
+  $COMPOSE up -d postgres mariadb mysql >/dev/null 2>&1
+else
+  $COMPOSE up -d postgres mariadb mysql minio minio-init >/dev/null 2>&1
+fi
 
 echo "== wait for databases + minio-init =="
 for _ in $(seq 1 30); do
@@ -43,6 +55,7 @@ for _ in $(seq 1 30); do
   mh=$(docker inspect -f '{{.State.Health.Status}}' bh-e2e_MARIADB 2>/dev/null)
   yh=$(docker inspect -f '{{.State.Health.Status}}' bh-e2e_MYSQL 2>/dev/null)
   ii=$(docker inspect -f '{{.State.Status}}:{{.State.ExitCode}}' bh-e2e_MINIO_INIT 2>/dev/null)
+  [ "$E2E_MINIO" = 0 ] && ii="exited:0"   # not started (E2E_MINIO=0)
   echo "  postgres=$ph mariadb=$mh mysql=$yh minio-init=$ii"
   [ "$ph" = healthy ] && [ "$mh" = healthy ] && [ "$yh" = healthy ] && [ "$ii" = "exited:0" ] && break
   sleep 5
@@ -327,6 +340,10 @@ echo "$out" | grep -q "hello-fs" && echo "$out" | grep -q "nested" \
 
 # ── S3-bucket source (mirror with per-object metadata) ───────────────────────
 echo "== engine: s3-bucket-source =="
+if [ "$E2E_MINIO" = 0 ]; then
+  skip "s3-bucket source round trips (E2E_MINIO=0: no MinIO)"
+  return 0   # the last section: end this suite, the runner goes on
+fi
 # scripts/e2e_s3.py seeds and checks the objects: bodies, content headers
 # (Content-Disposition & co.), user metadata and tags. It reuses the backup
 # user's credentials from $dest.
