@@ -78,7 +78,7 @@ With `"keep_acl": true` the dump keeps the privileges (`GRANT`/`REVOKE` on every
 
 ## `mariadb`
 
-Logical dump of one or more MariaDB databases. A single Alpine `mariadb-client` covers MariaDB and MySQL via `mariadb-dump`, with a `mysqldump` fallback — CI round-trips MariaDB 11.4, 11.8 and 13 and MySQL 8.0, 8.4 and 26.7 through it (`scripts/e2e.sh`). The password is passed via the `MYSQL_PWD` environment variable, never on the command line. Dumps are written as `<name>.sql.gz`. Dump flags are fixed: `--single-transaction --quick --routines --triggers --events --no-tablespaces --default-character-set=utf8mb4`.
+Logical dump of one or more MariaDB databases. A single Alpine `mariadb-client` covers MariaDB and MySQL via `mariadb-dump`, with a `mysqldump` fallback — CI round-trips it (`scripts/e2e.sh`) against the server versions in `docker-compose.e2e.yml`, the LTS lines MariaDB 11.4 and MySQL 8.4, and the newest MariaDB and MySQL releases; each run logs the exact versions under test. The password is passed via the `MYSQL_PWD` environment variable, never on the command line. Dumps are written as `<name>.sql.gz`. Dump flags are fixed: `--single-transaction --quick --routines --triggers --events --no-tablespaces --default-character-set=utf8mb4`.
 
 | field | default | description |
 | --- | --- | --- |

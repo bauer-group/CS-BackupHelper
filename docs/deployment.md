@@ -292,8 +292,9 @@ run a different major you either:
   docker build --build-arg PG_CLIENT_VERSION=17 -t myregistry/backuphelper:17 .
   ```
 
-The bundled `mariadb-client` covers MariaDB and MySQL (CI round-trips MariaDB
-11.4–13 and MySQL 8.0–26.7), so no analogous pin is needed for those.
+The bundled `mariadb-client` covers MariaDB and MySQL (CI round-trips the LTS
+lines MariaDB 11.4 and MySQL 8.4, the newest releases and the versions in
+`docker-compose.e2e.yml`), so no analogous pin is needed for those.
 
 ## Compose: the `backup` service and profile pattern
 
