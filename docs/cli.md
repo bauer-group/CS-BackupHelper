@@ -31,7 +31,7 @@ Because arguments are appended after the `backuphelper` entrypoint, `docker run 
 
 | Variable | Default | Used by | Purpose |
 | -------- | ------- | ------- | ------- |
-| `BACKUP_DATA_DIR` | `/data` | all commands | Directory holding snapshot artifacts (`<id>.tar.gz[.age\|.gpg]`) and sidecar manifests (`<id>.manifest.json`). |
+| `BACKUP_DATA_DIR` | `/data` | all commands | Directory holding snapshot artifacts (`<id>.tar.gz[.age\|.gpg]`) and sidecar manifests (`<id>.manifest.json`). An id is the run's UTC start, `2026-07-05_03-15-00`; with several jobs it also names the job, `2026-07-05_03-15-00_files-nightly` — see [snapshot ids](configuration.md#snapshot-ids). |
 | `TZ` | `Etc/UTC` | daemon | Timezone for cron scheduling. |
 | `BACKUP_LOG_LEVEL` | `INFO` | daemon / `--now` | Log verbosity. |
 | `BACKUP_LOG_FORMAT` | `console` | daemon / `--now` | `console` or structured JSON logging. |
@@ -94,7 +94,7 @@ Exit codes: `0` every job ended in `success` or `warning` · `1` any job ended i
 
 ### `list`
 
-Lists local snapshots discovered in the data dir. Each row is the snapshot id and the archive size in bytes; prints `no snapshots found` when the data dir is empty.
+Lists local snapshots discovered in the data dir — of every job — plus those that exist only in the off-site S3 target of the job selected with `--job` (default: the first job), marked `(off-site only)` with size `0`. Each row is the snapshot id and the archive size in bytes, sorted by time; prints `no snapshots found` when there is none. Plain and job-scoped ids ([snapshot ids](configuration.md#snapshot-ids)) appear side by side.
 
 ```bash
 docker run --rm -v backup-data:/data \
@@ -127,6 +127,7 @@ Recomputes the archive's sha256 and compares it against `archive_sha256` in the 
 | Argument | Description |
 | -------- | ----------- |
 | `snapshot_id` | The snapshot id to check. |
+| `--job <name>` | The job whose off-site S3 target holds the snapshot when it is not in the data dir. Defaults to the job a job-scoped id names, else the first job. |
 
 ```bash
 docker run --rm -v backup-data:/data \
@@ -144,7 +145,7 @@ Exit codes: `0` archive matches manifest · `2` mismatch, missing archive, or mi
 | ----------------- | ----------- |
 | `snapshot_id` | The snapshot id to restore. |
 | `--force`, `-f` | Skip the interactive "this overwrites live data" confirmation. Required for non-interactive runs. |
-| `--job <name>` | Select which configured job's sources to restore into. Defaults to the first job. |
+| `--job <name>` | Select which configured job's sources to restore into. Defaults to the job a job-scoped id names (`…_files-nightly` → `files-nightly`), else the first job. |
 | `--only <component>` | Restore only the named component(s); repeatable. Component names are those shown in the manifest (e.g. `database`, `uploads`, `s3`). Every name is checked **before anything is touched**: a name that is not in the snapshot, that failed at backup time, or that has no matching source in the selected job aborts the restore with exit `1` and logs the valid component names. |
 
 ```bash

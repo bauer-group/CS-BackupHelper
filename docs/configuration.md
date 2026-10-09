@@ -112,7 +112,7 @@ A container runs **N jobs**; the common case is one. A single job may list sever
 
 | Field | Default | Description |
 | --- | --- | --- |
-| `name` | `"main"` | Job name (used in schedule ids, alerts, restore `--job`) |
+| `name` | `"main"` | Job name (used in schedule ids, alerts, `--job`, and in the [snapshot ids](#snapshot-ids) of a config with several jobs). Give every job a distinct name |
 | `sources` | `[]` | What to back up — see [sources](sources.md) |
 | `destinations` | `[{"type":"local"}]` | Where to store it — `local` and/or `s3`, see [destinations](destinations.md) |
 | `keep_local` | `true` | When `false`, delete the local copy once an off-site S3 destination has stored this snapshot (archive + manifest uploaded, size verified). If none did — S3 unconfigured (empty bucket), unreachable, or the upload failed — the local copy is kept and the run reports a `warning` |
@@ -120,6 +120,14 @@ A container runs **N jobs**; the common case is one. A single job may list sever
 | `retention` | see below | How many/long to keep — see [retention](retention.md) |
 | `encryption` | `{"mode":"none"}` | Optional age/gpg — see [encryption](encryption.md) |
 | `notifications` | `{"channels":[]}` | Alerts — see [notifications](notifications.md) |
+
+### Snapshot ids
+
+A snapshot id is the start of its run in UTC, `YYYY-MM-DD_HH-MM-SS`, e.g. `2026-07-05_03-15-00`. In a config with **several jobs** the id also names the job: `2026-07-05_03-15-00_files-nightly`. The jobs share the data dir (and may share an S3 bucket and prefix); up to 1.7.7 two jobs that started in the same second wrote the same files, and the second one replaced the first one's snapshot. In the id, every character of the job name other than a letter, digit, `-` or `_` becomes `-`, so keep job names distinct after that (`db.hourly` and `db-hourly` would collide).
+
+- A **single-job** config keeps the plain timestamp — its ids look exactly as before.
+- Both forms sort by time. `list`, `show`, `verify`, `download`, `restore` and `prune` take either; snapshots written before the upgrade keep their plain ids and stay listable, verifiable and restorable.
+- `restore` and `verify` without `--job` use the job a job-scoped id names, else the first job.
 
 ### Schedule
 

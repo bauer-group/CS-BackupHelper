@@ -38,11 +38,11 @@ from .plugins.registry import build_source
 from .sources.base import StagedComponent
 from .retention import Snapshot
 from .retention import manager as retention_manager
+from .snapshots import SnapshotScope, parse_snapshot_id
 from .state import RunRecord, record_run
 
 log = logging.getLogger(__name__)
 
-_SID_FORMAT = "%Y-%m-%d_%H-%M-%S"
 _ENCRYPT_SUFFIX = {"age": ".age", "gpg": ".gpg"}
 
 
@@ -96,9 +96,14 @@ def run_job(
     now: Optional[datetime] = None,
     snapshot_id: Optional[str] = None,
     hooks: Optional[HookRegistry] = None,
+    scope: Optional[SnapshotScope] = None,
 ) -> JobResult:
+    """Run ``job`` once. ``scope`` says how its snapshots are named among the
+    configured jobs (snapshots.scope_for); without it the job is treated as
+    the only one: plain timestamp ids."""
     now = now or datetime.now(timezone.utc)
-    sid = snapshot_id or now.strftime(_SID_FORMAT)
+    scope = scope or SnapshotScope(job.name)
+    sid = snapshot_id or scope.new_id(now)
     data_dir = Path(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
     work = data_dir / ".work" / sid
@@ -660,10 +665,10 @@ def _describe(exc: BaseException) -> str:
 
 
 def parse_snapshot_timestamp(sid: str, fallback: datetime) -> datetime:
-    try:
-        return datetime.strptime(sid, _SID_FORMAT).replace(tzinfo=timezone.utc)
-    except ValueError:
-        return fallback
+    """When a snapshot was taken, from its id (plain or job-scoped); ``fallback``
+    for an id the engine did not generate."""
+    when, _ = parse_snapshot_id(sid)
+    return when or fallback
 
 
 def _event(job: Job, instance: str, sid: str, status: str, total_bytes: int,

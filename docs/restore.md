@@ -55,7 +55,7 @@ This **overwrites live data** for the selected job's sources. Databases are drop
 
 | Flag | Effect |
 | ---- | ------ |
-| `--job <name>` | Choose which configured job's sources receive the restore. Defaults to the **first** job. Fails with exit `1` if the name matches no job. |
+| `--job <name>` | Choose which configured job's sources receive the restore. Defaults to the job a job-scoped snapshot id names (see [snapshot ids](configuration.md#snapshot-ids)), else the **first** job. Fails with exit `1` if the name matches no job. |
 | `--only <component>` | Restore only the named component(s). Repeatable (`--only database --only uploads`). Names are the manifest component names shown by `show`. Everything not listed is skipped. The selection is validated before anything is touched (no hook runs, no data is written): a name that is not in the snapshot, that failed at backup time, or that has no matching source in the selected job fails the restore with exit `1`, and the log lists the valid component names. |
 
 ```bash

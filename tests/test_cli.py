@@ -228,3 +228,104 @@ def test_download_copies_artifact(tmp_path):
     out = tmp_path / "out"
     assert runner.invoke(app, ["download", sid, str(out)], env=env).exit_code == 0
     assert (out / f"{sid}.tar.gz").exists() and (out / f"{sid}.manifest.json").exists()
+
+
+# ── snapshot ids: job-scoped when several jobs share the data dir ────────────
+def _freeze_runs_at(monkeypatch, when):
+    """Every run starts at ``when``, as two jobs fired in the same second."""
+    import datetime as dt
+
+    import backuphelper.runner as runner_module
+
+    class Frozen(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return when if tz else when.replace(tzinfo=None)
+
+    monkeypatch.setattr(runner_module, "datetime", Frozen)
+
+
+def _two_jobs_env(tmp_path):
+    for name, content in (("db", "D"), ("files", "F")):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / f"{name}.txt").write_text(content)
+    cfg = {"instance_name": "i", "jobs": [
+        {"name": name, "sources": [{"type": "filesystem", "name": name, "path": str(tmp_path / name)}],
+         "destinations": [{"type": "local"}]} for name in ("db", "files")]}
+    return {"BACKUP_CONFIG_JSON": json.dumps(cfg), "BACKUP_DATA_DIR": str(tmp_path / "data")}
+
+
+def _ids(env):
+    return [line.split()[0] for line in runner.invoke(app, ["list"], env=env).stdout.splitlines()]
+
+
+def test_jobs_that_start_in_the_same_second_keep_their_own_snapshots(tmp_path, monkeypatch):
+    # Regression: ids carried no job name, so the second job wrote the same
+    # <id>.tar.gz and <id>.manifest.json and replaced the first job's snapshot.
+    import shutil
+    from datetime import datetime, timezone
+
+    _freeze_runs_at(monkeypatch, datetime(2026, 7, 6, 3, 0, 0, tzinfo=timezone.utc))
+    env = _two_jobs_env(tmp_path)
+    assert runner.invoke(app, ["create"], env=env).exit_code == 0
+
+    assert _ids(env) == ["2026-07-06_03-00-00_db", "2026-07-06_03-00-00_files"]
+    for name in ("db", "files"):
+        sid = f"2026-07-06_03-00-00_{name}"
+        shown = json.loads(runner.invoke(app, ["show", sid], env=env).stdout)
+        assert shown["snapshot_id"] == sid and [c["name"] for c in shown["components"]] == [name]
+        assert runner.invoke(app, ["verify", sid], env=env).stdout.startswith("OK")
+    shutil.rmtree(tmp_path / "db")
+    restored = runner.invoke(app, ["restore", "2026-07-06_03-00-00_db", "--job", "db", "--force"],
+                             env=env)
+    assert restored.exit_code == 0 and (tmp_path / "db" / "db.txt").read_text() == "D"
+
+
+def test_restore_without_job_picks_the_job_a_scoped_id_names(tmp_path, monkeypatch):
+    # Without --job, restore used the first job: a later job's snapshot found
+    # no matching source, every component was skipped and it still reported
+    # "restore complete".
+    import shutil
+    from datetime import datetime, timezone
+
+    _freeze_runs_at(monkeypatch, datetime(2026, 7, 6, 3, 0, 0, tzinfo=timezone.utc))
+    env = _two_jobs_env(tmp_path)
+    assert runner.invoke(app, ["create"], env=env).exit_code == 0
+    shutil.rmtree(tmp_path / "files")
+    restored = runner.invoke(app, ["restore", "2026-07-06_03-00-00_files", "--force"], env=env)
+    assert restored.exit_code == 0
+    assert (tmp_path / "files" / "files.txt").read_text() == "F"
+
+
+def test_a_single_job_keeps_plain_timestamp_ids(tmp_path, monkeypatch):
+    # The backup round-trip gate of every consumer matches ^YYYY-MM-DD_HH-MM-SS$.
+    from datetime import datetime, timezone
+
+    _freeze_runs_at(monkeypatch, datetime(2026, 7, 6, 3, 0, 0, tzinfo=timezone.utc))
+    env = _env(tmp_path)
+    assert runner.invoke(app, ["create"], env=env).exit_code == 0
+    assert runner.invoke(app, ["list"], env=env).stdout.split()[0] == "2026-07-06_03-00-00"
+
+
+def test_old_plain_and_new_scoped_snapshots_live_side_by_side(tmp_path, monkeypatch):
+    # A deployment that grows from one job to two keeps its old snapshots
+    # listable, verifiable and restorable next to the new job-scoped ones.
+    import shutil
+    from datetime import datetime, timezone
+
+    env = _two_jobs_env(tmp_path)
+    single = json.loads(env["BACKUP_CONFIG_JSON"])
+    single["jobs"] = single["jobs"][:1]
+    _freeze_runs_at(monkeypatch, datetime(2026, 7, 5, 3, 0, 0, tzinfo=timezone.utc))
+    assert runner.invoke(app, ["create"], env={**env, "BACKUP_CONFIG_JSON": json.dumps(single)}
+                         ).exit_code == 0
+    _freeze_runs_at(monkeypatch, datetime(2026, 7, 6, 3, 0, 0, tzinfo=timezone.utc))
+    assert runner.invoke(app, ["create"], env=env).exit_code == 0
+
+    assert _ids(env) == ["2026-07-05_03-00-00", "2026-07-06_03-00-00_db",
+                         "2026-07-06_03-00-00_files"]
+    for sid in _ids(env):
+        assert runner.invoke(app, ["verify", sid], env=env).exit_code == 0, sid
+    shutil.rmtree(tmp_path / "db")
+    assert runner.invoke(app, ["restore", "2026-07-05_03-00-00", "--force"], env=env).exit_code == 0
+    assert (tmp_path / "db" / "db.txt").read_text() == "D"

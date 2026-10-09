@@ -39,7 +39,10 @@ volumes:
 
 Layout inside `/data`:
 
-- `<snapshot-id>.tar.gz` (or `.tar.gz.age` / `.tar.gz.gpg` when encrypted) — the bundle
+- `<snapshot-id>.tar.gz` (or `.tar.gz.age` / `.tar.gz.gpg` when encrypted) — the bundle.
+  The id is the run's UTC start, `2026-07-05_03-15-00`; in a config with several
+  jobs it also names the job, `2026-07-05_03-15-00_files-nightly` (see
+  [snapshot ids](configuration.md#snapshot-ids))
 - `<snapshot-id>.manifest.json` — the sidecar manifest carrying `created_at`,
   per-component `sha256`, and `archive_sha256`
 - `.work/<snapshot-id>/` — transient staging, removed after each run
