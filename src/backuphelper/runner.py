@@ -316,15 +316,19 @@ def _restore_component(spec: SourceSpec, comp: Component, extracted: Path, work:
         return False
 
 
-def _decrypt_if_needed(artifact: Path, work: Path, job: Job) -> Path:
+def _decrypt_if_needed(artifact: Path, work: Path, job: Optional[Job] = None) -> Path:
     """The plain bundle of ``artifact``: decrypted by its suffix, whatever
-    mode the job encrypts with today. age needs the job's identity file."""
+    mode the job encrypts with today. age needs the job's identity file.
+
+    Command plugins reuse this as ``_decrypt_if_needed(artifact, work)``, so
+    ``job`` stays optional; without it an age artifact cannot be decrypted."""
     if artifact.suffix == ".age":
-        identity = job.encryption.identity_file
+        identity = job.encryption.identity_file if job is not None else None
         if not identity:
+            whose = f"of job {job.name!r}" if job is not None else "(pass the job that holds it)"
             raise EncryptionError(
-                f"{artifact.name} is encrypted with age: set encryption.identity_file of "
-                f"job {job.name!r} to the age identity file (the private key) to restore it")
+                f"{artifact.name} is encrypted with age: set encryption.identity_file {whose} "
+                f"to the age identity file (the private key) to restore it")
         out = work / artifact.with_suffix("").name
         return decrypt(artifact, out, mode="age", identity=identity)
     if artifact.suffix == ".gpg":
