@@ -862,6 +862,23 @@ def test_spec_component_name_matches_source_for_every_type():
         assert _spec_component_name(spec) == build_source(spec.model_dump()).component_name, spec_dict
 
 
+def test_a_source_disabled_by_a_numeric_env_override_stays_disabled(tmp_path):
+    # A discrete override passes a source's own keys as text now; ENABLED=0
+    # must still switch the source off as the number 0 did.
+    from backuphelper.config.loader import load_config
+
+    cfg = load_config({
+        "BACKUP_CONFIG_JSON": json.dumps({"jobs": [{
+            "name": "main",
+            "sources": [{"type": "env", "name": "env", "whitelist": []},
+                        {"type": "filesystem", "name": "gone", "path": str(tmp_path / "nope")}]}]}),
+        "BACKUP_JOBS__0__SOURCES__1__ENABLED": "0"})
+    result = run_job(cfg.jobs[0], data_dir=tmp_path / "data", instance_name="i", now=NOW,
+                     snapshot_id="d0")
+    assert result.status == "success"
+    assert [c.name for c in result.components] == ["env"]
+
+
 def test_disabled_source_is_skipped(tmp_path):
     # A source with "enabled": false is a config-deactivated toggle (e.g. NocoDB's
     # BACKUP_INCLUDE_FILES / BACKUP_DATABASE_DUMP=false) — it must be skipped
@@ -1059,9 +1076,9 @@ def test_retention_prunes_old_local_snapshots(tmp_path):
 
 
 def test_validation_errors_never_carry_secret_values(tmp_path, monkeypatch):
-    # A numeric secret from a discrete env override (JSON-parsed into an int)
-    # fails validation; pydantic used to quote it as input_value=... into the job
-    # errors, the alert and the persisted, off-site-uploaded manifest.
+    # A numeric secret (a JSON number where the source or destination expects
+    # text) fails validation; pydantic used to quote it as input_value=... into
+    # the job errors, the alert and the persisted, off-site-uploaded manifest.
     from pydantic import BaseModel
 
     from backuphelper.config.loader import load_config
@@ -1077,13 +1094,13 @@ def test_validation_errors_never_carry_secret_values(tmp_path, monkeypatch):
     cfg = load_config({
         "BACKUP_CONFIG_JSON": json.dumps({"jobs": [{
             "name": "main",
-            "sources": [{"type": "postgres", "host": "db", "database": "app", "user": "app"},
+            "sources": [{"type": "postgres", "host": "db", "database": "app", "user": "app",
+                         "password": 20261006},
                         {"type": "filesystem", "name": "plugin", "path": str(tmp_path)},
                         {"type": "env", "name": "env", "whitelist": []}],
             "destinations": [{"type": "local"},
-                             {"type": "s3", "bucket": "offsite", "access_key": "AK"}]}]}),
-        "BACKUP_JOBS__0__SOURCES__0__PASSWORD": "20261006",
-        "BACKUP_JOBS__0__DESTINATIONS__1__SECRET_KEY": "90817263",
+                             {"type": "s3", "bucket": "offsite", "access_key": "AK",
+                              "secret_key": 90817263}]}]}),
     })
     data = tmp_path / "data"
     spy = _Spy()

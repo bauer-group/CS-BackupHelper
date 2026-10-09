@@ -377,7 +377,7 @@ def _produce(job: Job, staging: Path, errors: list[str]) -> list[Component]:
     components: list[Component] = []
     for spec in job.sources:
         data = spec.model_dump()
-        if not data.get("enabled", True):
+        if not _enabled(data.get("enabled", True)):
             # Generic config-deactivation toggle: a source with "enabled": false is
             # simply not run (maps app include-toggles like BACKUP_INCLUDE_FILES /
             # BACKUP_DATABASE_DUMP=false onto the shared engine without hardcoding them).
@@ -418,6 +418,20 @@ def _produce(job: Job, staging: Path, errors: list[str]) -> list[Component]:
                                             sha256=sha256_file(sc.path), metadata=sc.metadata))
                 _report_source_warnings(sc, errors)
     return components
+
+
+def _enabled(value: object) -> bool:
+    """A source's ``enabled`` toggle. A discrete env override passes a number
+    for a source's own key as text (config.loader), so a number given as text
+    counts as that number did before ("0" disables); other text is truthy."""
+    if isinstance(value, str):
+        try:
+            number = json.loads(value)
+        except ValueError:
+            return bool(value)
+        if isinstance(number, (int, float)) and not isinstance(number, bool):
+            return bool(number)
+    return bool(value)
 
 
 def _report_source_warnings(sc: StagedComponent, errors: list[str]) -> None:

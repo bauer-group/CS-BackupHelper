@@ -49,7 +49,15 @@ BACKUP_JOBS__0__RETENTION__COUNT=30
 BACKUP_JOBS__0__SCHEDULE__CRON="0 2 * * *"
 ```
 
-Values are parsed as JSON when possible (so `30` is an int, `true` a bool), otherwise kept as strings.
+How a value is read depends on the field it sets (the examples shorten `BACKUP_JOBS__0__…` to `…`):
+
+| Target field | How the value is read | Examples |
+| --- | --- | --- |
+| A text field of the engine's config — `name`, `schedule.cron` / `hour` / `minute`, `notifications.email.password`, … | verbatim, never parsed | `…__NOTIFICATIONS__EMAIL__PASSWORD=20261006` stays the text `20261006`; `…__SCHEDULE__HOUR=3` stays `"3"`; `1e5`, `1.50` and `null` stay text |
+| A number, boolean, list or object field of the engine's config — `retention.count`, `keep_local`, `notifications.channels`, `retention.gfs`, … | parsed as JSON when it is valid JSON, otherwise kept as text | `…__RETENTION__COUNT=30` is the number 30, `…__KEEP_LOCAL=false` a boolean, `…__NOTIFICATIONS__CHANNELS=["email"]` a list |
+| A key of a source or destination — `…__SOURCES__0__PASSWORD`, `…__SOURCES__0__PORT`, `…__DESTINATIONS__1__SECRET_KEY`, plugin keys, …; the source or destination declares these, not the engine | `true` / `false` / `null`, a JSON array and a JSON object are parsed; everything else, numbers included, stays text | `…__SOURCES__0__ENABLED=false` is a boolean; `…__SOURCES__0__PASSWORD=20261006` stays text; `…__SOURCES__0__PORT=5433` is passed as text and the source's own model turns it into the number 5433 |
+
+Every built-in source and the S3 destination accept numbers given as text, and a source's `enabled` toggle still treats `0` as off. A plugin source that reads its spec without a pydantic model receives a number from a discrete override as text: validate the spec with a model (see [plugins](plugins.md)), or set the value in the JSON config. Up to 1.7.7 every value was parsed as JSON, so a numeric password became a number and failed validation, and `1e5` became `100000.0`.
 
 ## Secrets: `${VAR}` interpolation
 
