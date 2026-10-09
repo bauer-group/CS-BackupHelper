@@ -20,6 +20,9 @@ mc(){ docker run --rm --network bh-e2e --entrypoint sh ghcr.io/bauer-group/cs-mi
 # SQL from stdin, run in the server containers with the root password from
 # their own environment (no credentials in this script).
 psql_app(){ $COMPOSE exec -T postgres psql -U app -d app -v ON_ERROR_STOP=1 -X -q -tA "$@" 2>&1; }
+# psql_in <database> [psql args]: the same in another database of the server.
+psql_in(){ local db=$1; shift
+           $COMPOSE exec -T postgres psql -U app -d "$db" -v ON_ERROR_STOP=1 -X -q -tA "$@" 2>&1; }
 maria_sql(){ $COMPOSE exec -T mariadb sh -c \
         'exec mariadb -uroot -p"$MARIADB_ROOT_PASSWORD" --default-character-set=utf8mb4 -N app' 2>&1; }
 maria_app_sql(){ $COMPOSE exec -T mariadb sh -c \
@@ -75,8 +78,9 @@ INSERT INTO events VALUES (1, '2025-06-01', 'old'), (2, '2026-06-01', 'new');
 GRANT USAGE ON SCHEMA public TO app_runtime;
 GRANT SELECT, INSERT ON demo, events TO app_runtime;
 SQL
-# "<demo name>|<event ids>|<partitions>|<runtime SELECT on demo>|<runtime INSERT on events>"
-pg_state(){ psql_app <<'SQL'
+# pg_state [database]: "<demo name>|<event ids>|<partitions>|<runtime SELECT on
+# demo>|<runtime INSERT on events>" of the database (default: app)
+pg_state(){ psql_in "${1:-app}" <<'SQL'
 SELECT concat_ws('|', (SELECT name FROM demo WHERE id = 1),
                  (SELECT string_agg(id::text, ',' ORDER BY id) FROM events),
                  (SELECT count(*) FROM pg_inherits WHERE inhparent = 'public.events'::regclass),
@@ -112,6 +116,55 @@ out=$(do_restore "$pg_acl" "$sid" app); st=$(pg_state)
 [ "$st" = "e2e-original|1,2|2|t|t" ] \
   && ok "postgres restore with keep_acl keeps the runtime role's grants" \
   || ko "postgres restore with keep_acl: got '$st'" "$out"
+
+# (d) the database owner, not a superuser: an application's own role backs up
+# and restores its database - the partitioned table and keep_acl included. The
+# engine logs in over the network with the password built here; the seed runs
+# as that role over the server's local socket.
+owner_secret=$(rand_secret)
+out=$(psql_app <<SQL
+DROP DATABASE IF EXISTS app_owned;
+DROP ROLE IF EXISTS app_owner;
+CREATE ROLE app_owner LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD '$owner_secret';
+CREATE DATABASE app_owned OWNER app_owner;
+SQL
+)
+psql_owner(){ $COMPOSE exec -T postgres psql -U app_owner -d app_owned -v ON_ERROR_STOP=1 -X -q -tA "$@" 2>&1; }
+out+=$(psql_owner <<'SQL'
+CREATE TABLE demo(id int PRIMARY KEY, name text);
+INSERT INTO demo VALUES (1, 'e2e-original');
+CREATE TABLE events(id int NOT NULL, at date NOT NULL, note text, PRIMARY KEY (id, at))
+  PARTITION BY RANGE (at);
+CREATE TABLE events_2025 PARTITION OF events FOR VALUES FROM ('2025-01-01') TO ('2026-01-01');
+CREATE TABLE events_2026 PARTITION OF events FOR VALUES FROM ('2026-01-01') TO ('2027-01-01');
+INSERT INTO events VALUES (1, '2025-06-01', 'old'), (2, '2026-06-01', 'new');
+GRANT USAGE ON SCHEMA public TO app_runtime;
+GRANT SELECT, INSERT ON demo, events TO app_runtime;
+SQL
+)
+st=$(psql_app -c "SELECT concat_ws('|', rolsuper, rolcreatedb, rolcreaterole, rolbypassrls)
+                  FROM pg_roles WHERE rolname = 'app_owner'")
+[ "$st" = "f|f|f|f" ] && [ "$(pg_state app_owned)" = "e2e-original|1,2|2|t|t" ] \
+  && ok "postgres database owner app_owner seeded, not a superuser" \
+  || ko "postgres database owner app_owner seeded: got '$st'" "$out"
+pg_owner='{"instance_name":"e2e","jobs":[{"name":"pgowner","sources":[{"type":"postgres","host":"postgres","database":"app_owned","user":"app_owner","password":"'"$owner_secret"'","keep_acl":true}],"destinations":[{"type":"local"},'"${dest/PFX/pgowner}"']}]}'
+out=$(backup_now "$pg_owner"); sid=$(printf "%s" "$out" | sid_of)
+printf "%s" "$out" | grep -q "finished: success" \
+  && ok "postgres backup as the database owner ($sid)" \
+  || ko "postgres backup as the database owner ($sid)" "$out"
+archived pgowner "$sid" "postgres (database owner)"
+psql_owner -c "DROP TABLE demo, events;" >/dev/null
+out=$(do_restore "$pg_owner" "$sid" app_owned); st=$(pg_state app_owned)
+[ "$st" = "e2e-original|1,2|2|t|t" ] \
+  && ok "postgres restore as the database owner into an empty database" \
+  || ko "postgres restore as the database owner into an empty database: got '$st'" "$out"
+psql_owner -c "UPDATE demo SET name = 'mutated' WHERE id = 1; DELETE FROM events WHERE id = 1;
+               INSERT INTO events VALUES (3, '2026-07-01', 'after-backup');
+               REVOKE ALL ON demo, events FROM app_runtime;" >/dev/null
+out=$(do_restore "$pg_owner" "$sid" app_owned); st=$(pg_state app_owned)
+[ "$st" = "e2e-original|1,2|2|t|t" ] \
+  && ok "postgres restore as the database owner over a live partitioned table keeps the grants" \
+  || ko "postgres restore as the database owner over a live partitioned table: got '$st'" "$out"
 
 # ── MariaDB ──────────────────────────────────────────────────────────────────
 echo "== engine: mariadb =="
