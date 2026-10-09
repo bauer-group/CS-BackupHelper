@@ -213,7 +213,10 @@ A command plugin typically pairs with a Source plugin in the same package: the
 Source writes the app export into the snapshot, the command group reads it back
 out. Reuse the engine's restore front-half (off-site S3 hydration, the sha256
 gate, decrypt, `extract_bundle`) instead of reimplementing it — see the NocoDB
-plugin's `_snapshot.open_export` for the pattern.
+plugin's `_snapshot.open_export` for the pattern. Pass the job to the decrypt
+step, `_decrypt_if_needed(artifact, work, job)`: an age snapshot is decrypted
+with the job's `encryption.identity_file`, and without the job it cannot be
+(`EncryptionError`, as before when age ran without an identity).
 
 ## Lifecycle hooks
 

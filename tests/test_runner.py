@@ -1155,6 +1155,32 @@ def test_a_failed_decryption_ends_the_restore_with_an_error_not_a_traceback(
                and "no identity matched" in r.getMessage() for r in caplog.records)
 
 
+def test_plugins_still_call_the_decrypt_helper_without_a_job(tmp_path, monkeypatch):
+    # Command plugins (CS-NocoDB, CS-n8n, CS-DocumentSigning,
+    # IP-CloudflareTerraform) reuse the restore front-half and call
+    # _decrypt_if_needed(artifact, work): the job argument must stay optional.
+    from backuphelper.encryption.engine import EncryptionError
+    from backuphelper.runner import _decrypt_if_needed
+
+    calls = _fake_age(monkeypatch)
+    plain = tmp_path / "s1.tar.gz"
+    plain.write_bytes(b"bundle")
+    assert _decrypt_if_needed(plain, tmp_path) == plain
+
+    sealed = tmp_path / "s2.tar.gz.age"
+    sealed.write_bytes(b"bundle")
+    with pytest.raises(EncryptionError, match="encryption.identity_file"):
+        _decrypt_if_needed(sealed, tmp_path)
+    assert calls == []
+
+    job = _fs_job(tmp_path, encryption={"mode": "age", "recipient": "age1abc",
+                                        "identity_file": "/keys/age-identity.txt"})
+    work = tmp_path / "work"
+    work.mkdir()
+    assert _decrypt_if_needed(sealed, work, job=job) == work / "s2.tar.gz"
+    assert calls == [{"mode": "age", "identity": "/keys/age-identity.txt"}]
+
+
 def _pre_restore_spy():
     from backuphelper.plugins.hooks import HookRegistry
 
