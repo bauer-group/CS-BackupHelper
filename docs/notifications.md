@@ -76,7 +76,7 @@ Sends a multipart text + HTML message over SMTP — with STARTTLS (the default),
 | `sender` | string | `null` | `From` header. |
 | `recipients` | list of string | `[]` | `To` header. Each entry may hold several addresses separated by `,` or `;` (a plain string works too); whitespace is stripped and empty entries are dropped, so `[""]` from an unset variable means *no recipients*. Required — with no address left the channel is skipped with a warning instead of sending. |
 
-The subject is `[<instance>] backup <status>: <snapshot_id>`. The body includes job, duration, size and any errors.
+The subject is `[<instance>] backup <status>: <snapshot_id>`. The body — plain-text and HTML part alike — includes the job, the run's duration and size (each only when the alert carries a value for it) and every error text. In the HTML part a multi-line error text keeps its line breaks and indentation (`white-space: pre-wrap`), e.g. the stderr lines of a failed `pg_dump`; mail clients that ignore that style show it as one wrapped paragraph. Up to 1.7.7 the HTML part showed neither duration nor size.
 
 Every value the HTML part shows — title, message, instance, job, snapshot id, status and each error text — is HTML-escaped. An error text that contains markup or `<`, `>`, `&` (a crafted file name below a filesystem source, a database or exception message) therefore appears as literal text and is never interpreted by the mail client. The plain-text part carries the same values unchanged.
 
