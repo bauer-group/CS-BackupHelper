@@ -76,8 +76,10 @@ services:
       MYSQL_USER: app
       MYSQL_PASSWORD: devpassword
       MYSQL_ROOT_PASSWORD: rootpw
+    # Over TCP (127.0.0.1), not the socket: the entrypoint's temporary init
+    # server runs with --skip-networking, so only the final server answers.
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-prootpw"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-prootpw"]
       interval: 10s
       timeout: 5s
       retries: 10
