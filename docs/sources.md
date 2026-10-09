@@ -164,6 +164,8 @@ Mirrors a full S3 (or S3-compatible) bucket into a `<name>.tar.gz` component —
 
 The content headers decide how a client treats an object: Outline, for example, stores attachments of types a browser would render (HTML, SVG) with `Content-Disposition: attachment`, so they are downloaded instead of rendered. Snapshots taken with 1.7.7 or earlier captured only `Content-Type`; their objects restore without the other four headers.
 
+**Tags that cannot be read.** Reading an object's tags needs the `s3:GetObjectTagging` permission, and some S3-compatible stores have no object tagging at all. When `get_object_tagging` is refused (`AccessDenied`, `NotImplemented`, `MethodNotAllowed`, `NotSupported`, … or a bare HTTP 403/405/501), the object is still backed up: its `tags` are recorded as `null` in `metadata.json` (an object without tags has `{}`), and the component carries one warning for all of them — `tags of 3 of 120 objects (get_object_tagging: AccessDenied); these objects restore without tags` — so the job ends in `warning` with an alert. Those objects restore without tags. Any other error while reading tags (a server error, a timeout) still fails the component.
+
 ---
 
 ## `filesystem`
