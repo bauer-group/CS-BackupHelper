@@ -15,6 +15,7 @@ import tempfile
 from collections import Counter
 from pathlib import Path
 from typing import Any, Mapping, Optional
+from urllib.parse import quote, urlencode
 
 import boto3
 from botocore.client import Config
@@ -156,7 +157,9 @@ class S3BucketSource(Source):
             if obj.get("metadata"):
                 extra["Metadata"] = obj["metadata"]
             if obj.get("tags"):
-                extra["Tagging"] = "&".join(f"{k}={v}" for k, v in obj["tags"].items())
+                # Tagging is a URL query string: unencoded, "c++" comes back as
+                # "c  " and a space or "=" in a key or value garbles the tag.
+                extra["Tagging"] = urlencode(obj["tags"], quote_via=quote)
             self._client.put_object(Bucket=self.cfg.bucket, Key=key, Body=body, **extra)
 
 

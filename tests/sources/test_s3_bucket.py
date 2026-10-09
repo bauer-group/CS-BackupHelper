@@ -259,3 +259,21 @@ def test_objects_without_captured_tags_restore_without_tags(tmp_path):
     for key, body in (("a.txt", b"a"), ("b.txt", b"b"), ("c.txt", b"c")):
         assert c.get_object(Bucket="dst", Key=key)["Body"].read() == body
         assert c.get_object_tagging(Bucket="dst", Key=key)["TagSet"] == []
+
+
+@mock_aws
+def test_restore_keeps_tags_with_url_special_characters(tmp_path):
+    # Unencoded, the Tagging query string turns "c++" into "c  ".
+    tags = {"lang": "c++", "path": "a/b c", "expr": "x=y", "owner": "ops@example.com"}
+    staged = tmp_path / "staged"
+    (staged / "objects").mkdir(parents=True)
+    (staged / "objects" / "a.txt").write_bytes(b"a")
+    (staged / "metadata.json").write_text(json.dumps({"objects": [
+        {"key": "a.txt", "metadata": {}, "tags": tags}]}))
+    c = _client()
+    c.create_bucket(Bucket="dst", CreateBucketConfiguration={"LocationConstraint": REGION})
+
+    S3BucketSource(_spec("dst")).restore(staged)
+
+    restored = c.get_object_tagging(Bucket="dst", Key="a.txt")["TagSet"]
+    assert {t["Key"]: t["Value"] for t in restored} == tags
