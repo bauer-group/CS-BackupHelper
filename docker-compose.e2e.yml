@@ -11,6 +11,7 @@
 #   local files                — filesystem source + restore (writable /files)
 #   sink, mail-starttls,       — alerts suite: HTTP and SMTP receivers
 #   mail-smtps
+#   minio-tls                  — tls suite: MinIO over HTTPS only
 #
 # TLS services and the backup service mount .e2e-pki/ (read-only, /pki): a CA
 # and server certificate scripts/e2e.sh generates per run, never committed.
@@ -169,6 +170,31 @@ services:
       MP_SMTP_AUTH: ${E2E_SMTP_AUTH:-}
     volumes:
       - ./.e2e-pki:/pki:ro
+    networks: [e2e]
+
+  # ── tls suite ─────────────────────────────────────────────────────────────
+  # MinIO over HTTPS only, with the runtime CA's server certificate
+  # (.e2e-pki/minio: public.crt, private.key and an empty CAs/ - the mount is
+  # read-only, so MinIO must not have to create it). Its root password,
+  # E2E_MINIO_TLS_SECRET, is built at runtime by scripts/e2e/tls.sh.
+  minio-tls:
+    image: ghcr.io/bauer-group/cs-minio/minio:latest
+    container_name: bh-e2e_MINIO_TLS
+    hostname: minio-tls
+    <<: *logging
+    command: server --address ":9000" --certs-dir /pki/minio /data
+    environment:
+      MINIO_ROOT_USER: tls-admin
+      MINIO_ROOT_PASSWORD: ${E2E_MINIO_TLS_SECRET:-}
+      MINIO_REGION_NAME: eu-central-1
+    volumes:
+      - ./.e2e-pki:/pki:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsk", "https://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
     networks: [e2e]
 
   backup:
