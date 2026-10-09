@@ -159,6 +159,26 @@ def test_age_decrypt_builds_expected_argv_and_returns_out(tmp_path):
     ]
 
 
+def test_age_decrypt_passes_the_identity_file(tmp_path):
+    # age has no default identity: without -i it treats the file as
+    # passphrase-encrypted and fails ("identities are required").
+    src = tmp_path / "archive.tar.age"
+    out = tmp_path / "archive.tar"
+    fake = FakeRun()
+
+    decrypt(src, out, mode="age", identity="/keys/age-identity.txt", run=fake)
+
+    assert fake.argv == [
+        "age",
+        "--decrypt",
+        "--identity",
+        "/keys/age-identity.txt",
+        "--output",
+        str(out),
+        str(src),
+    ]
+
+
 def test_gpg_decrypt_builds_expected_argv_and_returns_out(tmp_path):
     src = tmp_path / "archive.tar.gpg"
     out = tmp_path / "archive.tar"

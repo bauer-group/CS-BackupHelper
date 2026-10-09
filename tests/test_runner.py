@@ -1065,6 +1065,79 @@ def test_restore_roundtrip_filesystem(tmp_path):
     assert (src / "sub" / "b.txt").read_text() == "B"
 
 
+def _fake_age(monkeypatch):
+    """age stand-ins that copy the archive unchanged; decrypt records how it
+    was called."""
+    import backuphelper.runner as runner
+
+    calls = []
+
+    def fake_encrypt(path, out, *, mode, recipient=None, **_):
+        shutil.copyfile(path, out)
+        return out
+
+    def fake_decrypt(path, out, *, mode, identity=None, **_):
+        calls.append({"mode": mode, "identity": identity})
+        shutil.copyfile(path, out)
+        return out
+
+    monkeypatch.setattr(runner, "encrypt", fake_encrypt)
+    monkeypatch.setattr(runner, "decrypt", fake_decrypt)
+    return calls
+
+
+def test_an_age_snapshot_restores_with_the_configured_identity_file(tmp_path, monkeypatch):
+    # Regression: restore ran "age --decrypt" without an identity, which age
+    # reads as a passphrase-encrypted file: no age snapshot could be restored
+    # ("the file is not passphrase-encrypted, identities are required").
+    calls = _fake_age(monkeypatch)
+    job = _fs_job(tmp_path, encryption={"mode": "age", "recipient": "age1abc",
+                                        "identity_file": "/keys/age-identity.txt"})
+    data = tmp_path / "data"
+    run_job(job, data_dir=data, instance_name="i", now=NOW, snapshot_id="age1")
+    assert (data / "age1.tar.gz.age").exists()
+    (tmp_path / "uploads" / "a.txt").unlink()
+
+    assert restore_snapshot(job, data_dir=data, snapshot_id="age1") is True
+    assert calls == [{"mode": "age", "identity": "/keys/age-identity.txt"}]
+    assert (tmp_path / "uploads" / "a.txt").read_text() == "A"
+
+
+def test_an_age_snapshot_without_an_identity_file_fails_before_age_runs(
+        tmp_path, monkeypatch, caplog):
+    calls = _fake_age(monkeypatch)
+    job = _fs_job(tmp_path, encryption={"mode": "age", "recipient": "age1abc"})
+    data = tmp_path / "data"
+    run_job(job, data_dir=data, instance_name="i", now=NOW, snapshot_id="age2")
+
+    with caplog.at_level("ERROR", logger="backuphelper.runner"):
+        assert restore_snapshot(job, data_dir=data, snapshot_id="age2") is False
+    assert calls == []
+    assert any("age2" in r.getMessage() and "encryption.identity_file" in r.getMessage()
+               for r in caplog.records)
+
+
+def test_a_failed_decryption_ends_the_restore_with_an_error_not_a_traceback(
+        tmp_path, monkeypatch, caplog):
+    import backuphelper.runner as runner
+    from backuphelper.encryption.engine import EncryptionError
+
+    _fake_age(monkeypatch)
+    job = _fs_job(tmp_path, encryption={"mode": "age", "recipient": "age1abc",
+                                        "identity_file": "/keys/wrong.txt"})
+    data = tmp_path / "data"
+    run_job(job, data_dir=data, instance_name="i", now=NOW, snapshot_id="age3")
+
+    def refuse(*_a, **_k):
+        raise EncryptionError("age exited with 1: age: error: no identity matched any of the recipients")
+
+    monkeypatch.setattr(runner, "decrypt", refuse)
+    with caplog.at_level("ERROR", logger="backuphelper.runner"):
+        assert restore_snapshot(job, data_dir=data, snapshot_id="age3") is False
+    assert any("cannot decrypt snapshot age3" in r.getMessage()
+               and "no identity matched" in r.getMessage() for r in caplog.records)
+
+
 def _pre_restore_spy():
     from backuphelper.plugins.hooks import HookRegistry
 

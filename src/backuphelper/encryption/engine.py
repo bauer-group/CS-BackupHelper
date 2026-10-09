@@ -76,13 +76,19 @@ def decrypt(
     out: Path,
     *,
     mode: str,
+    identity: str | None = None,
     run=subprocess.run,
 ) -> Path:
-    """Decrypt ``path`` into ``out`` using ``mode``; ``none`` is a passthrough."""
+    """Decrypt ``path`` into ``out`` using ``mode``; ``none`` is a passthrough.
+
+    ``identity`` is the age identity file. age has no default identity: without
+    one it treats the file as passphrase-encrypted and fails. gpg ignores it and
+    finds the secret key in its keyring (``GNUPGHOME``)."""
     if mode == "none":
         return path
     if mode == "age":
-        argv = ["age", "--decrypt", "--output", str(out), str(path)]
+        argv = ["age", "--decrypt", *(["--identity", identity] if identity else []),
+                "--output", str(out), str(path)]
         _run_checked(argv, run)
         return out
     if mode == "gpg":
