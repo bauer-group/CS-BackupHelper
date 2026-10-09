@@ -125,7 +125,7 @@ When `ensure_bucket` is true, the destination checks the bucket with `head_bucke
 An `https://` endpoint's certificate is verified, as before these options existed: against boto3's default CA bundle, or the file the `AWS_CA_BUNDLE` environment variable names. The same two fields exist on the [`s3` source](sources.md#s3).
 
 - **Private CA** (a self-hosted MinIO or Ceph behind an internal PKI): mount the CA certificate into the container and set `ca_bundle` to its path. The file *replaces* the default bundle for this endpoint, so it must contain every CA the endpoint's chain needs. A path that does not exist is an error (the destination is skipped for the run).
-- **No verification**: `"verify_tls": false` switches the check off. Every run logs a warning, and urllib3 adds an `InsecureRequestWarning`.
+- **No verification**: `"verify_tls": false` switches the check off. Every run logs a warning naming the endpoint, and urllib3 prints an `InsecureRequestWarning` to stderr for **every request** — an `s3` source mirror makes about two per object, so expect a long log.
 
 > **Security warning.** Without verification the connection is still encrypted, but the
 > server is no longer authenticated: anyone on the network path can impersonate the
