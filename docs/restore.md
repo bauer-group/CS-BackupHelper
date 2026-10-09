@@ -70,10 +70,10 @@ Each component is replayed by its own source type. The behaviours differ in how 
 
 | Component kind | Restore action | Destructive? |
 | -------------- | -------------- | ------------ |
-| `postgres` | `pg_restore --clean --if-exists --no-owner --no-acl --single-transaction` into the target DB for custom-format `.dump`; gunzipped `.sql.gz` plain dumps are streamed through `psql`. `--clean --if-exists` drops existing objects before recreating them. | Yes — full DB replace |
+| `postgres` | `pg_restore --clean --if-exists --no-owner --no-acl --single-transaction` (privileges re-applied instead with `keep_acl`) into the target DB for custom-format `.dump`; gunzipped `.sql.gz` plain dumps are streamed through `psql`. `--clean --if-exists` drops existing objects before recreating them; partitioned tables of the target that the dump recreates are dropped first, in the same transaction (see [sources](sources.md#postgres)). | Yes — full DB replace |
 | `mariadb` / `mysql` | Gunzipped `.sql.gz` logical dump streamed into the `mariadb`/`mysql` client. The dump's own `DROP`/`CREATE` statements replay over the live database. | Yes — full DB replace |
 | `filesystem` | The extracted tree is **overlaid** onto the configured `path` with `copy2` — files are created/overwritten. Note this is an overlay, **not** a mirror: files present in the live target but absent from the backup are **not** deleted. | Partial — overwrites, never deletes |
-| `s3` | Every captured object is re-`PUT` to the bucket **with its original metadata** — content-type, user metadata, and tags are re-applied from the captured `metadata.json`. | Yes — objects overwritten by key |
+| `s3` | Every captured object is re-`PUT` to the bucket **with its original metadata** — the content headers (`Content-Type`, `Content-Disposition`, `Cache-Control`, `Content-Encoding`, `Content-Language`), user metadata and tags are re-applied from the captured `metadata.json`. | Yes — objects overwritten by key |
 | `env` | **Not applied.** Env snapshots are informational only; restore treats them as a no-op. To re-apply environment variables, set them yourself (or wire a repo lifecycle hook). | No |
 
 Restore uses the same source configuration as backup, so the target host/credentials come from the selected job's source specs (see [sources](sources.md)). Component-to-source matching is by name: a source's component name (its explicit `name`, or the database name for DB sources) must equal the manifest component name.
@@ -123,7 +123,7 @@ If the snapshot is only available off-site, first copy the archive **and** its `
 
 ## Limitations and caveats
 
-- **Validate DB restore against staging first.** The database restore paths (Postgres `pg_restore`/`psql`, MariaDB/MySQL client replay) are covered by unit tests, but have not been proven against a production-scale live database. Before relying on them for a real recovery, rehearse the full restore against a **staging** copy of the target DB and confirm the data and schema come back intact.
+- **Validate DB restore against staging first.** The database restore paths (Postgres `pg_restore`/`psql`, MariaDB/MySQL client replay) are covered by unit tests and by real-server round trips in CI (`scripts/e2e.sh`: PostgreSQL 18 incl. partitioned tables and grants; MariaDB and MySQL in their LTS lines 11.4 and 8.4, their newest releases and the versions in `docker-compose.e2e.yml`), but have not been proven against a production-scale live database. Before relying on them for a real recovery, rehearse the full restore against a **staging** copy of the target DB and confirm the data and schema come back intact.
 - **Filesystem restore is additive.** It overwrites and adds files but never deletes stray files already on disk. For a byte-exact tree, restore into an empty/clean target path.
 - **`env` is never auto-applied.** Environment variables are captured for reference only; you must re-apply them yourself.
 - **Restore refuses a corrupt archive.** It re-checks `archive_sha256` before decrypting and stops on a mismatch. Still run `verify` first, so a bad snapshot shows up before the application is stopped.

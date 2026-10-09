@@ -18,9 +18,9 @@ NocoDB REST export, service quiescing) lives in each repo as a registered
 
 ## Features
 
-- **Sources**: PostgreSQL 18, MariaDB 11/12, MySQL 8/9, S3 buckets (with
-  per-object metadata/tags/content-type), filesystem path-groups, env whitelist
-  — combinable into one atomic snapshot.
+- **Sources**: PostgreSQL 18, MariaDB 11.4+, MySQL 8.0+ (incl. 26.x), S3
+  buckets (with per-object metadata, tags and content headers), filesystem
+  path-groups, env whitelist — combinable into one atomic snapshot.
 - **Destinations**: local + any S3-compatible target (MinIO, R2, B2, Wasabi,
   Ceph, Garage) via a hand-rolled equal-chunk multipart uploader.
 - **Integrity**: deterministic archives + sha256 manifest (embedded + sidecar)
@@ -111,3 +111,9 @@ python -m venv .venv && ./.venv/Scripts/pip install -e ".[test]"
 
 Tests are a hard build gate: the production image cannot be built unless
 `pytest` passes (multi-stage `COPY --from=test`).
+
+`scripts/e2e.sh` runs real backup → restore round trips through the built
+image against PostgreSQL, MariaDB, MySQL, MinIO and a filesystem tree
+(Docker required). CI runs it on every pull request and before every release,
+against the server versions of `docker-compose.e2e.yml`, the LTS lines and the
+newest releases.

@@ -17,27 +17,20 @@ import logging
 from pathlib import Path
 from typing import Any, Mapping
 
-import boto3
-from botocore.client import Config
 from botocore.exceptions import ClientError
 
-from ..config.models import ConfigModel
 from ..net.retry import call_with_retry
+from ..net.s3 import S3ConnectionConfig, build_s3_client
 from .base import Destination
 
 logger = logging.getLogger(__name__)
 
 
-class S3DestinationConfig(ConfigModel):
+class S3DestinationConfig(S3ConnectionConfig):
     """Validated configuration for an :class:`S3Destination`."""
 
     bucket: str
-    endpoint: str | None = None
-    region: str = "eu-central-1"
-    access_key: str = ""
-    secret_key: str = ""
     prefix: str = ""
-    force_path_style: bool = True
     multipart_threshold: int = 100 * 1024 * 1024
     multipart_chunk_size: int = 50 * 1024 * 1024
     ensure_bucket: bool = True
@@ -55,15 +48,7 @@ class S3Destination(Destination):
             self._ensure_bucket()
 
     def _build_client(self) -> Any:
-        style = "path" if self.cfg.force_path_style else "auto"
-        return boto3.client(
-            "s3",
-            endpoint_url=self.cfg.endpoint or None,
-            aws_access_key_id=self.cfg.access_key or None,
-            aws_secret_access_key=self.cfg.secret_key or None,
-            region_name=self.cfg.region,
-            config=Config(s3={"addressing_style": style}, signature_version="s3v4"),
-        )
+        return build_s3_client(self.cfg)
 
     def _full_key(self, key: str) -> str:
         return f"{self.cfg.prefix}{key}"

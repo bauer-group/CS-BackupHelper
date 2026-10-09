@@ -74,7 +74,11 @@ class EncryptionConfig(ConfigModel):
 class EmailChannelConfig(ConfigModel):
     host: Optional[str] = None
     port: int = 587
-    tls: bool = True
+    tls: bool = True  # STARTTLS after connecting; not used with implicit_tls
+    # TLS from the first byte (SMTPS, usually port 465) instead of a plain
+    # connection that STARTTLS upgrades. Off by default, so ``tls`` keeps its
+    # meaning for every existing config.
+    implicit_tls: bool = False
     username: Optional[str] = None
     password: Optional[str] = None
     sender: Optional[str] = None
