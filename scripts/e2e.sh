@@ -231,6 +231,41 @@ st=$(echo "$extras_sql" | mysql_sql)
 [ "$st" = "1|1|1" ] && ok "mysql restore keeps utf8mb4 text, trigger and procedure" \
   || ko "mysql utf8mb4 text, trigger and procedure: got '$st'"
 
+# Least-privilege backup users (on MySQL 26+ the routines come from a second
+# pass). bk_min holds what the dump needs - SELECT, SHOW VIEW, TRIGGER, EVENT on
+# the database, SHOW_ROUTINE to read routine bodies - but no LOCK TABLES: no
+# pass may lock tables. bk_exec sees the procedure only through EXECUTE, so
+# MySQL hides its body: that backup must fail, not succeed without it.
+min_secret=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+exec_secret=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+mysql_sql >/dev/null <<SQL
+CREATE USER 'bk_min'@'%' IDENTIFIED BY '$min_secret';
+GRANT SELECT, SHOW VIEW, TRIGGER, EVENT ON app.* TO 'bk_min'@'%';
+GRANT SHOW_ROUTINE ON *.* TO 'bk_min'@'%';
+CREATE USER 'bk_exec'@'%' IDENTIFIED BY '$exec_secret';
+GRANT SELECT, SHOW VIEW, TRIGGER, EVENT, EXECUTE ON app.* TO 'bk_exec'@'%';
+FLUSH PRIVILEGES;
+SQL
+# as_user <job> <user> <password>: the mysql job under another name and login.
+as_user(){ printf '%s' "$mysql" | sed -E 's/"name":"mysql"/"name":"'"$1"'"/;
+             s/"user":"bk","password":"[^"]*"/"user":"'"$2"'","password":"'"$3"'"/'; }
+out=$(backup_now "$(as_user mysqlmin bk_min "$min_secret")"); sid=$(printf "%s" "$out" | sid_of)
+printf "%s" "$out" | grep -q "finished: success" \
+  && ok "mysql backup as a user without LOCK TABLES ($sid)" \
+  || ko "mysql backup as a user without LOCK TABLES ($sid)" "$out"
+echo "DROP PROCEDURE demo_count; FLUSH PRIVILEGES;" | mysql_sql >/dev/null
+out=$(do_restore "$(as_user mysqlmin bk "$bk_secret")" "$sid" app)
+echo "$extras_sql" | mysql_sql | grep -qx "1|1|1"
+restored "mysql restore of that backup keeps the procedure" "$out" $?
+out=$(backup_now "$(as_user mysqlexec bk_exec "$exec_secret")"); sid=$(printf "%s" "$out" | sid_of)
+shown=$(show_snapshot "$sid")
+if printf "%s" "$out" | grep -q "finished: error" && printf "%s" "$shown" | grep -q "insufficient privileges"; then
+  ok "mysql backup of a routine the user cannot read fails ($sid)"
+  printf '%s\n' "$shown" | grep -o '"error": "[^"]*"' | head -1 | sed 's/^/         | /'
+else
+  ko "mysql backup of a routine the user cannot read fails ($sid)" "$out"$'\n'"$shown"
+fi
+
 # ── Filesystem (local files) ─────────────────────────────────────────────────
 echo "== engine: filesystem =="
 # Seed as root and hand /files to the non-root backup uid so it can read (for
