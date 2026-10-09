@@ -170,31 +170,77 @@ out=$(do_restore "$pg_owner" "$sid" app_owned); st=$(pg_state app_owned)
 echo "== engine: mariadb =="
 $COMPOSE exec -T mariadb mariadb -uroot -prootpw app -e \
   "DROP TABLE IF EXISTS demo; CREATE TABLE demo(id int PRIMARY KEY, name varchar(64)); INSERT INTO demo VALUES (1,'e2e-original');" 2>/dev/null
-# 4-byte UTF-8 (--default-character-set=utf8mb4), a trigger (--triggers) and a
-# stored procedure (--routines), created by the application user like an
-# application would: the dump keeps their DEFINER.
+# 4-byte UTF-8 (--default-character-set=utf8mb4), a trigger (--triggers), a
+# stored procedure (--routines) and an event (--events), created by the
+# application user like an application would: the dump keeps their DEFINER.
+# The event is disabled and scheduled in the future, so it never runs.
 extras_seed="ALTER TABLE demo CONVERT TO CHARACTER SET utf8mb4;
 INSERT INTO demo VALUES (2, 'utf8mb4 😀 ü');
 CREATE TRIGGER demo_bi BEFORE INSERT ON demo FOR EACH ROW SET NEW.name = TRIM(NEW.name);
 DROP PROCEDURE IF EXISTS demo_count;
-CREATE PROCEDURE demo_count(OUT n INT) SELECT COUNT(*) INTO n FROM demo;"
+CREATE PROCEDURE demo_count(OUT n INT) SELECT COUNT(*) INTO n FROM demo;
+DROP EVENT IF EXISTS demo_tick;
+CREATE EVENT demo_tick ON SCHEDULE EVERY 1 DAY STARTS '2030-01-01 00:00:00' DISABLE
+  DO UPDATE demo SET name = name WHERE id = 0;"
 echo "$extras_seed" | maria_app_sql
-# "<4-byte text intact>|<trigger present>|<procedure present>"
+# The routine and event a restore must bring back (the trigger goes with its table).
+extras_drop="DROP PROCEDURE IF EXISTS demo_count; DROP EVENT IF EXISTS demo_tick;"
+# "<4-byte text intact>|<trigger present>|<procedure present>|<event present>"
 extras_sql="SELECT CONCAT((SELECT name FROM demo WHERE id = 2) = 'utf8mb4 😀 ü', '|',
   (SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = 'app' AND TRIGGER_NAME = 'demo_bi'), '|',
-  (SELECT COUNT(*) FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = 'app' AND ROUTINE_NAME = 'demo_count'));"
+  (SELECT COUNT(*) FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = 'app' AND ROUTINE_NAME = 'demo_count'), '|',
+  (SELECT COUNT(*) FROM information_schema.EVENTS WHERE EVENT_SCHEMA = 'app' AND EVENT_NAME = 'demo_tick'));"
 maria='{"instance_name":"e2e","jobs":[{"name":"maria","sources":[{"type":"mariadb","host":"mariadb","database":"app","user":"app","password":"devpassword"}],"destinations":[{"type":"local"},'"${dest/PFX/maria}"']}]}'
 out=$(backup_now "$maria"); sid=$(printf "%s" "$out" | sid_of)
 printf "%s" "$out" | grep -q "finished: success" && ok "mariadb backup ($sid)" || ko "mariadb backup ($sid)" "$out"
 archived maria "$sid" mariadb
 $COMPOSE exec -T mariadb mariadb -uroot -prootpw app -e "DROP TABLE demo;" 2>/dev/null
-echo "DROP PROCEDURE demo_count;" | maria_sql >/dev/null
+echo "$extras_drop" | maria_sql >/dev/null
 out=$(do_restore "$maria" "$sid" app)
 $COMPOSE exec -T mariadb mariadb -uroot -prootpw app -N -e "SELECT name FROM demo WHERE id=1;" 2>/dev/null | grep -q "e2e-original"
 restored "mariadb restore roundtrip" "$out" $?
 st=$(echo "$extras_sql" | maria_sql)
-[ "$st" = "1|1|1" ] && ok "mariadb restore keeps utf8mb4 text, trigger and procedure" \
-  || ko "mariadb utf8mb4 text, trigger and procedure: got '$st'"
+[ "$st" = "1|1|1|1" ] && ok "mariadb restore keeps utf8mb4 text, trigger, procedure and event" \
+  || ko "mariadb utf8mb4 text, trigger, procedure and event: got '$st'"
+
+# Least-privilege backup users with the grants docs/sources.md lists: bk_min
+# holds SELECT, SHOW VIEW, TRIGGER and EVENT on the database plus SHOW CREATE
+# ROUTINE (MariaDB 11.3+) to read the routine bodies - no LOCK TABLES, no
+# global privilege. bk_exec sees the procedure only through EXECUTE, so MariaDB
+# hides its body: that backup must fail, not succeed without it. The restores
+# run as the application user, the definer of every object.
+maria_min_secret=$(rand_secret)
+maria_exec_secret=$(rand_secret)
+out=$(maria_sql <<SQL
+DROP USER IF EXISTS 'bk_min'@'%', 'bk_exec'@'%';
+CREATE USER 'bk_min'@'%' IDENTIFIED BY '$maria_min_secret';
+GRANT SELECT, SHOW VIEW, TRIGGER, EVENT, SHOW CREATE ROUTINE ON app.* TO 'bk_min'@'%';
+CREATE USER 'bk_exec'@'%' IDENTIFIED BY '$maria_exec_secret';
+GRANT SELECT, SHOW VIEW, TRIGGER, EVENT, EXECUTE ON app.* TO 'bk_exec'@'%';
+SQL
+)
+[ -z "$out" ] && ok "mariadb least-privilege users created" || ko "mariadb least-privilege users created" "$out"
+echo "  bk_min: $(echo "SHOW GRANTS FOR 'bk_min'@'%';" | maria_sql | tail -1)"
+# maria_as <job> <user> <password>: the mariadb job under another name and login.
+maria_as(){ printf '%s' "$maria" | sed -E 's/"name":"maria"/"name":"'"$1"'"/;
+              s/"user":"app","password":"[^"]*"/"user":"'"$2"'","password":"'"$3"'"/'; }
+out=$(backup_now "$(maria_as mariamin bk_min "$maria_min_secret")"); sid=$(printf "%s" "$out" | sid_of)
+printf "%s" "$out" | grep -q "finished: success" \
+  && ok "mariadb backup as a least-privilege user ($sid)" \
+  || ko "mariadb backup as a least-privilege user ($sid)" "$out"
+$COMPOSE exec -T mariadb mariadb -uroot -prootpw app -e "DROP TABLE demo;" 2>/dev/null
+echo "$extras_drop" | maria_sql >/dev/null
+out=$(do_restore "$maria" "$sid" app)
+echo "$extras_sql" | maria_sql | grep -qx "1|1|1|1"
+restored "mariadb restore of that backup keeps trigger, procedure and event" "$out" $?
+out=$(backup_now "$(maria_as mariaexec bk_exec "$maria_exec_secret")"); sid=$(printf "%s" "$out" | sid_of)
+shown=$(show_snapshot "$sid")
+if printf "%s" "$out" | grep -q "finished: error" && printf "%s" "$shown" | grep -q "insufficient privileges"; then
+  ok "mariadb backup of a routine the user cannot read fails ($sid)"
+  printf '%s\n' "$shown" | grep -o '"error": "[^"]*"' | head -1 | sed 's/^/         | /'
+else
+  ko "mariadb backup of a routine the user cannot read fails ($sid)" "$out"$'\n'"$shown"
+fi
 
 # ── MySQL ────────────────────────────────────────────────────────────────────
 echo "== engine: mysql =="
@@ -219,13 +265,13 @@ out=$(backup_now "$mysql"); sid=$(printf "%s" "$out" | sid_of)
 printf "%s" "$out" | grep -q "finished: success" && ok "mysql backup ($sid)" || ko "mysql backup ($sid)" "$out"
 archived mysql "$sid" mysql
 $COMPOSE exec -T mysql mysql -uroot -prootpw app -e "DROP TABLE demo;" 2>/dev/null
-echo "DROP PROCEDURE demo_count; FLUSH PRIVILEGES;" | mysql_sql >/dev/null
+echo "$extras_drop FLUSH PRIVILEGES;" | mysql_sql >/dev/null
 out=$(do_restore "$mysql" "$sid" app)
 $COMPOSE exec -T mysql mysql -uroot -prootpw app -N -e "SELECT name FROM demo WHERE id=1;" 2>/dev/null | grep -q "e2e-original"
 restored "mysql restore roundtrip" "$out" $?
 st=$(echo "$extras_sql" | mysql_sql)
-[ "$st" = "1|1|1" ] && ok "mysql restore keeps utf8mb4 text, trigger and procedure" \
-  || ko "mysql utf8mb4 text, trigger and procedure: got '$st'"
+[ "$st" = "1|1|1|1" ] && ok "mysql restore keeps utf8mb4 text, trigger, procedure and event" \
+  || ko "mysql utf8mb4 text, trigger, procedure and event: got '$st'"
 
 # Least-privilege backup users (on MySQL 26+ the routines come from a second
 # pass). bk_min holds what the dump needs - SELECT, SHOW VIEW, TRIGGER, EVENT on
@@ -249,10 +295,10 @@ out=$(backup_now "$(as_user mysqlmin bk_min "$min_secret")"); sid=$(printf "%s" 
 printf "%s" "$out" | grep -q "finished: success" \
   && ok "mysql backup as a user without LOCK TABLES ($sid)" \
   || ko "mysql backup as a user without LOCK TABLES ($sid)" "$out"
-echo "DROP PROCEDURE demo_count; FLUSH PRIVILEGES;" | mysql_sql >/dev/null
+echo "$extras_drop FLUSH PRIVILEGES;" | mysql_sql >/dev/null
 out=$(do_restore "$(as_user mysqlmin bk "$bk_secret")" "$sid" app)
-echo "$extras_sql" | mysql_sql | grep -qx "1|1|1"
-restored "mysql restore of that backup keeps the procedure" "$out" $?
+echo "$extras_sql" | mysql_sql | grep -qx "1|1|1|1"
+restored "mysql restore of that backup keeps the procedure and the event" "$out" $?
 out=$(backup_now "$(as_user mysqlexec bk_exec "$exec_secret")"); sid=$(printf "%s" "$out" | sid_of)
 shown=$(show_snapshot "$sid")
 if printf "%s" "$out" | grep -q "finished: error" && printf "%s" "$shown" | grep -q "insufficient privileges"; then
