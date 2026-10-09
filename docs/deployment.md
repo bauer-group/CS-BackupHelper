@@ -263,6 +263,11 @@ For a config with **several jobs**:
   ran later. A job that has never run turns unhealthy once the grace after the
   daemon start is over — check that every configured job is scheduled to run
   within its max age.
+  Right after the upgrade, the snapshots from before it (plain ids) count for
+  the first job that stores in the data dir, next to that job's own run
+  record. Until that job runs again, another job's older failed snapshot can
+  keep it unhealthy, and another job's older good snapshot can hide its own
+  failure from before the upgrade. Its next run settles this.
 
 ## Security posture
 
