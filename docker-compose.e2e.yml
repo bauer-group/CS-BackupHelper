@@ -4,12 +4,15 @@
 # Stands up every backup source backend + a MinIO destination so scripts/e2e.sh
 # can run a real backup→restore roundtrip against each engine:
 #
-#   postgres / mariadb / mysql — DB dump + restore
+#   postgres / mariadb / mysql — DB dump + restore (postgres incl. a partitioned
+#                                table and a restricted role's grants)
 #   minio (+ assets bucket)    — S3-bucket-source mirror + restore
 #   local files                — filesystem source + restore (writable /files)
 #
 # The `backup` service carries no fixed config; the script passes a per-engine
-# BACKUP_CONFIG_JSON via `docker compose run -e`.
+# BACKUP_CONFIG_JSON via `docker compose run -e`. The database images below are
+# the ones Dependabot keeps current; scripts/e2e.sh can swap them per run
+# (E2E_POSTGRES_IMAGE / E2E_MARIADB_IMAGE / E2E_MYSQL_IMAGE).
 # =============================================================================
 
 x-logging: &logging
@@ -57,14 +60,9 @@ services:
     container_name: bh-e2e_MYSQL
     hostname: mysql
     <<: *logging
-    # IMPORTANT: MySQL 8.0+ defaults to caching_sha2_password, whose CLIENT
-    # plugin the alpine mariadb-client does NOT ship — so it cannot authenticate
-    # to a default MySQL 8/9. Here we force mysql_native_password so the app user
-    # is created with an auth the mariadb-client supports (this option exists in
-    # 8.0 but was removed in 8.4). In production, either create the backup user
-    # with mysql_native_password, or add the Oracle mysql-client in a
-    # meta-Dockerfile for caching_sha2 support. See docs/sources.md.
-    command: --default-authentication-plugin=mysql_native_password
+    # Default authentication: caching_sha2_password (the default since MySQL
+    # 8.0; mysql_native_password is off in 8.4 and gone in 9.0). The engine
+    # image ships its client plugin (mariadb-connector-c), see docs/sources.md.
     environment:
       MYSQL_DATABASE: app
       MYSQL_USER: app

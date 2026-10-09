@@ -20,6 +20,9 @@ htmlcov/
 !.env.example
 !.env.template
 
+# scripts/e2e.sh: server images swapped in for one run
+.e2e-images.yml
+
 # Editor / OS
 .vscode/
 .idea/
