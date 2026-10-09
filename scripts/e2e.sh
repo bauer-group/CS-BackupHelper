@@ -63,8 +63,9 @@ for suite in "${SUITES[@]}"; do
   [ -f "scripts/e2e/$suite.sh" ] || { echo "unknown suite '$suite' (suites: $ALL_SUITES, all)"; exit 2; }
 done
 
-PASS=0; FAIL=0
+PASS=0; FAIL=0; SKIPPED=0
 ok(){ echo "  [PASS] $1"; PASS=$((PASS+1)); }
+skip(){ echo "  [SKIP] $1"; SKIPPED=$((SKIPPED+1)); }
 # ko <label> [output]: a failed check, with the tail of the command output.
 ko(){
   echo "  [FAIL] $1"; FAIL=$((FAIL+1))
@@ -200,5 +201,5 @@ done
 
 # ── summary ──────────────────────────────────────────────────────────────────
 echo ""
-echo "== E2E result (${SUITES[*]}): $PASS passed, $FAIL failed =="
+echo "== E2E result (${SUITES[*]}): $PASS passed, $FAIL failed, $SKIPPED skipped =="
 [ "$FAIL" -eq 0 ]
