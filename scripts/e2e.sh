@@ -15,6 +15,9 @@
 #             (signed webhook, Teams, Slack, Discord, ntfy, Healthchecks) and
 #             SMTP servers with STARTTLS and SMTPS; levels, escaping of run
 #             data, an untrusted certificate, a receiver that never answers.
+#   multijob  two jobs in one data dir under the scheduler daemon: same-second
+#             start, job-scoped ids, per-job retention and prune, restore by a
+#             job-scoped id, SIGTERM drain, the per-job healthcheck.
 #
 # TLS endpoints use a CA generated per run with openssl (.e2e-pki/, mounted
 # read-only at /pki); no key material is kept in the repository.
@@ -35,7 +38,7 @@ export MSYS_NO_PATHCONV=1   # keep /paths literal for git-bash on Windows
 
 cd "$(dirname "$0")/.." || exit 1
 COMPOSE="docker compose -f docker-compose.e2e.yml"
-ALL_SUITES="engines alerts"
+ALL_SUITES="engines alerts multijob"
 PKI=".e2e-pki"
 
 KEEP=""
