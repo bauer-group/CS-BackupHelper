@@ -16,3 +16,6 @@ htmlcov
 .idea
 *.md
 !README.md
+
+# scripts/e2e.sh: per-run test CA and keys
+.e2e-pki

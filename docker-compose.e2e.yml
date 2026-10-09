@@ -2,12 +2,18 @@
 # BackupHelper — End-to-End Test Matrix (infra only; driven by scripts/e2e.sh)
 # =============================================================================
 # Stands up every backup source backend + a MinIO destination so scripts/e2e.sh
-# can run a real backup→restore roundtrip against each engine:
+# can run a real backup→restore roundtrip against each engine, and the
+# receivers its other suites deliver to. Each suite starts only its services:
 #
 #   postgres / mariadb / mysql — DB dump + restore (postgres incl. a partitioned
 #                                table and a restricted role's grants)
 #   minio (+ assets bucket)    — S3-bucket-source mirror + restore
 #   local files                — filesystem source + restore (writable /files)
+#   sink, mail-starttls,       — alerts suite: HTTP and SMTP receivers
+#   mail-smtps
+#
+# TLS services and the backup service mount .e2e-pki/ (read-only, /pki): a CA
+# and server certificate scripts/e2e.sh generates per run, never committed.
 #
 # The `backup` service carries no fixed config; the script passes a per-engine
 # BACKUP_CONFIG_JSON via `docker compose run -e`. The database images below are
@@ -112,6 +118,59 @@ services:
       minio: { condition: service_healthy }
     networks: [e2e]
 
+  # ── alerts suite ──────────────────────────────────────────────────────────
+  # sink: records every HTTP alert (webhook, Teams, Slack, Discord, ntfy,
+  # Healthchecks) for scripts/e2e_alerts.py - the engine image's own python.
+  sink:
+    image: backuphelper:e2e
+    pull_policy: never
+    container_name: bh-e2e_SINK
+    hostname: sink
+    <<: *logging
+    entrypoint: ["python", "/e2e/e2e_alerts.py", "serve"]
+    volumes:
+      - ./scripts/e2e_alerts.py:/e2e/e2e_alerts.py:ro
+    healthcheck:
+      test: ["CMD", "python", "/e2e/e2e_alerts.py", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks: [e2e]
+
+  # Two SMTP servers (Mailpit) with a certificate of the runtime CA that
+  # scripts/e2e.sh generates into .e2e-pki/: STARTTLS required on 587, implicit
+  # TLS (SMTPS) on 465, login required on both (E2E_SMTP_AUTH, "user:password",
+  # built at runtime). Their API on 8025 serves the messages that arrived.
+  mail-starttls:
+    image: axllent/mailpit:v1
+    container_name: bh-e2e_MAIL_STARTTLS
+    hostname: mail-starttls
+    <<: *logging
+    environment:
+      MP_SMTP_BIND_ADDR: 0.0.0.0:587
+      MP_SMTP_TLS_CERT: /pki/server.crt
+      MP_SMTP_TLS_KEY: /pki/server.key
+      MP_SMTP_REQUIRE_STARTTLS: "true"
+      MP_SMTP_AUTH: ${E2E_SMTP_AUTH:-}
+    volumes:
+      - ./.e2e-pki:/pki:ro
+    networks: [e2e]
+
+  mail-smtps:
+    image: axllent/mailpit:v1
+    container_name: bh-e2e_MAIL_SMTPS
+    hostname: mail-smtps
+    <<: *logging
+    environment:
+      MP_SMTP_BIND_ADDR: 0.0.0.0:465
+      MP_SMTP_TLS_CERT: /pki/server.crt
+      MP_SMTP_TLS_KEY: /pki/server.key
+      MP_SMTP_REQUIRE_TLS: "true"
+      MP_SMTP_AUTH: ${E2E_SMTP_AUTH:-}
+    volumes:
+      - ./.e2e-pki:/pki:ro
+    networks: [e2e]
+
   backup:
     build: { context: . }
     image: backuphelper:e2e
@@ -122,6 +181,7 @@ services:
     volumes:
       - e2e-data:/data
       - e2e-files:/files
+      - ./.e2e-pki:/pki:ro
     networks: [e2e]
 
 configs:
