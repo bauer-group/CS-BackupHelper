@@ -4,7 +4,7 @@ Retention decides which snapshots to keep and which to prune. Four independent p
 
 Every policy reasons over `Snapshot` objects, each with:
 
-- **`id`** — a sortable timestamp string (`%Y-%m-%d_%H-%M-%S`). Newest = lexicographically greatest.
+- **`id`** — a sortable timestamp string (`%Y-%m-%d_%H-%M-%S`), in a config with several jobs followed by `_<job>` ([snapshot ids](configuration.md#snapshot-ids)). Newest = lexicographically greatest among one job's snapshots.
 - **`when`** — the datetime the snapshot was taken.
 
 The policies are pure functions: they select ids to prune or keep and perform no I/O. The runner and the [`prune` CLI](#the-prune-cli) then act on that selection.
@@ -89,25 +89,35 @@ The net effect: dense recent coverage (14 latest + last 7 days) tapering to week
 
 **`count <= 0` safety example:** with `count: 0` and every GFS tier `0` and `age_days: 0`, no policy selects anything to prune — the entire history is kept. This is intentional: zeroed retention never deletes.
 
-## Retention applies per destination
+## Retention applies per job and destination
 
 Retention runs **independently for each configured destination**. After uploading a snapshot, the runner lists the snapshots that actually exist on each destination (local, S3) and applies the policy to that destination's own set. A destination that already holds a different set of snapshots (e.g. an off-site S3 target that has been offline) is pruned against its own contents, not the local view.
+
+It also runs **per job**: a job's policy only sees that job's own snapshots, so jobs that share the data dir or an S3 bucket and prefix never prune each other's snapshots. A snapshot belongs to a job when:
+
+- its id names the job (`2026-07-05_03-15-00_files-nightly`, the form every job of a multi-job config writes — see [snapshot ids](configuration.md#snapshot-ids));
+- in a single-job config: always, unless its id names another job;
+- in a config with several jobs, for a plain id (written before job-scoped ids existed, or while the config had one job): its `.offsite-pending.json` marker names the job, or — without a marker — the job is the first one in the config that stores snapshots in that place (the data dir, or that S3 bucket + prefix).
+
+Snapshots whose id names a job that is no longer configured belong to no job and are never pruned; delete them by hand when you no longer need them. Up to 1.7.7 a job's retention covered every snapshot on its destinations, other jobs' included.
 
 ## The `prune` CLI
 
 Retention also runs automatically after every scheduled backup. To apply it on demand to the **local** data directory:
 
 ```bash
-backuphelper prune              # apply the job's retention policy to local snapshots
+backuphelper prune              # apply every job's retention policy to its own local snapshots
 backuphelper prune --dry-run    # print what would be pruned, delete nothing
 backuphelper prune --keep 30    # override count to 30 for this run
+backuphelper prune --job files  # only the job "files"
 ```
 
 | Flag | Meaning |
 | --- | --- |
+| `--job NAME` | Prune only this job's snapshots (default: every job, each by its own policy). |
 | `--keep N` | Override the `count` field with `N` for this invocation (other policies unchanged). |
 | `--dry-run` | List the snapshots that would be pruned without deleting anything. |
 
-The command uses the first job's `retention` config, evaluates it over the local snapshots (found by their `*.manifest.json` sidecars), and — unless `--dry-run` — deletes every file belonging to each pruned snapshot id.
+For each job, the command evaluates the job's `retention` config over the job's own local snapshots (found by their `*.manifest.json` sidecars, attributed as [above](#retention-applies-per-job-and-destination)) and — unless `--dry-run` — deletes every file belonging to each pruned snapshot id. With a single job that is every local snapshot, as before.
 
 The `prune` CLI parses the real timestamp from each snapshot id (the same logic the scheduled runner uses), so all four policies — count, age, GFS and smart-last — behave identically whether pruning runs automatically after a backup or manually via the CLI.

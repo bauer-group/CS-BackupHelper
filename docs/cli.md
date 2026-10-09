@@ -163,22 +163,26 @@ Exit codes: `0` restore completed (or aborted at the confirmation prompt) · `1`
 
 ### `prune`
 
-Applies retention to the **local** snapshots in the data dir, deleting all files (`<id>.*`) of each pruned snapshot. Uses the first job's `retention` policy unless overridden.
+Applies retention to the **local** snapshots in the data dir, deleting all files (`<id>.*`) of each pruned snapshot. Every job's `retention` policy is applied to **that job's own** snapshots only — the ones whose [id](configuration.md#snapshot-ids) names it, plus, in a config with several jobs, plain ids it owns (see [retention per job](retention.md#retention-applies-per-job-and-destination)). A job never prunes another job's snapshot. With a single job this is the same as before: its policy over every snapshot in the data dir.
 
 | Option | Description |
 | ------ | ----------- |
-| `--keep <n>` | Override the retention `count` with `n` newest to keep. |
+| `--job <name>` | Prune only this job's snapshots. Default: every configured job, each by its own policy. |
+| `--keep <n>` | Override the retention `count` with `n` newest to keep — per job. |
 | `--dry-run` | Print what would be pruned without deleting anything. |
 
 ```bash
 # Preview retention on local snapshots
 docker compose run --rm backup prune --dry-run
 
-# Keep only the 7 newest, deleting the rest
+# Keep only the 7 newest of every job, deleting the rest
 docker compose run --rm backup prune --keep 7
+
+# Only the snapshots of the job "files-nightly"
+docker compose run --rm backup prune --job files-nightly --keep 7
 ```
 
-Prints `no jobs configured` when no job (and therefore no retention policy) exists. Exit codes: `0`.
+Prints `no jobs configured` when no job (and therefore no retention policy) exists. Exit codes: `0` · `1` `--job` names no configured job (nothing is deleted). Up to 1.7.7 `prune` applied the first job's policy to every snapshot in the data dir, other jobs' included.
 
 ### `download`
 
@@ -241,6 +245,6 @@ Exit codes: `0` healthy · `1` unhealthy.
 | `verify` | matches manifest | — | mismatch / missing |
 | `restore` | completed or aborted | no job / invalid `--only` / restore errors | — |
 | `download` | copied | not found | — |
-| `prune` | always | — | — |
+| `prune` | pruned (or nothing to prune) | `--job` names no job | — |
 | `config` | always | — | — |
 | `healthcheck` | healthy | last run failed, stale, no backup after the grace, or data dir not writable | — |

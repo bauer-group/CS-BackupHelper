@@ -38,7 +38,14 @@ from .plugins.registry import build_source
 from .sources.base import StagedComponent
 from .retention import Snapshot
 from .retention import manager as retention_manager
-from .snapshots import SnapshotScope, parse_snapshot_id
+from .snapshots import (
+    LOCAL,
+    PENDING_SUFFIX,
+    SnapshotScope,
+    parse_snapshot_id,
+    pending_owners,
+    s3_place,
+)
 from .state import RunRecord, record_run
 
 log = logging.getLogger(__name__)
@@ -138,12 +145,13 @@ def run_job(
             log.error("snapshot %s was not stored on any destination", sid)
             errors.append("snapshot was not stored on any destination — this run left no copy")
         _track_offsite(job, data_dir, sid, delivery, errors)
+        # Other jobs may store in the same places: every destination is pruned
+        # of this job's own snapshots only (snapshots.SnapshotScope.owns).
         for dest in delivery.destinations:
-            _apply_retention(dest, job.retention, now, errors)
+            _apply_retention(dest, job.retention, now, errors, scope, data_dir)
         if delivery.fallback is not None:
-            # The data dir may hold other jobs' snapshots: prune only this job's
-            # own fallback copies there, never the whole directory.
-            _apply_retention(delivery.fallback, job.retention, now, errors,
+            # Only this job's own fallback copies, never the whole data dir.
+            _apply_retention(delivery.fallback, job.retention, now, errors, scope, data_dir,
                              only=set(_pending_ids(data_dir, job.name)))
 
         _maybe_drop_local(job, data_dir, artifact.name, sid, delivery.stored, errors)
@@ -541,20 +549,9 @@ def _offsite_configured(job: Job) -> bool:
     return any(s.type == "s3" and (s.model_extra or {}).get("bucket") for s in job.destinations)
 
 
-_PENDING_SUFFIX = ".offsite-pending.json"
-
-
 def _pending_ids(data_dir: Path, job_name: str) -> list[str]:
     """Snapshots of this job that are in the data dir but not yet off-site."""
-    ids = []
-    for marker in sorted(data_dir.glob(f"*{_PENDING_SUFFIX}")):
-        try:
-            owner = json.loads(marker.read_text(encoding="utf-8")).get("job")
-        except (OSError, ValueError, AttributeError):
-            continue
-        if owner == job_name:
-            ids.append(marker.name[: -len(_PENDING_SUFFIX)])
-    return ids
+    return [sid for sid, owner in pending_owners(data_dir).items() if owner == job_name]
 
 
 def _track_offsite(job: Job, data_dir: Path, sid: str, delivery: _Delivery,
@@ -571,12 +568,12 @@ def _track_offsite(job: Job, data_dir: Path, sid: str, delivery: _Delivery,
     offsite = [d for d in delivery.stored if not isinstance(d, LocalDestination)]
     if not offsite:
         if _offsite_configured(job) and delivery.stored:
-            (data_dir / f"{sid}{_PENDING_SUFFIX}").write_text(
+            (data_dir / f"{sid}{PENDING_SUFFIX}").write_text(
                 json.dumps({"job": job.name}), encoding="utf-8")
         return
     keeps_local = job.keep_local and _has_local(job.destinations)
     for pending in _pending_ids(data_dir, job.name):
-        marker = data_dir / f"{pending}{_PENDING_SUFFIX}"
+        marker = data_dir / f"{pending}{PENDING_SUFFIX}"
         artifact = _find_artifact(data_dir, pending)
         sidecar = data_dir / f"{pending}.manifest.json"
         if artifact is None or not sidecar.exists():
@@ -634,14 +631,25 @@ def _upload(destinations: list[Destination], artifact: Path, sidecar: Path, sid:
     return stored
 
 
+def _place(dest: Destination) -> str:
+    if isinstance(dest, S3Destination):
+        return s3_place(dest.cfg.endpoint, dest.cfg.bucket, dest.cfg.prefix)
+    return LOCAL
+
+
 def _apply_retention(dest: Destination, cfg: RetentionConfig, now: datetime,
-                     errors: list[str], only: Optional[set[str]] = None) -> None:
+                     errors: list[str], scope: SnapshotScope, data_dir: Path,
+                     only: Optional[set[str]] = None) -> None:
+    """Prune the job's own snapshots on ``dest`` - or only the ids in ``only``."""
     try:
+        place = _place(dest)
+        marked = pending_owners(data_dir) if place == LOCAL else {}
         # Only top-level artifacts are snapshots; ignore any nested staging keys.
         sids = sorted({k[: -len(".manifest.json")] for k in dest.list_keys()
-                       if k.endswith(".manifest.json") and "/" not in k
-                       and (only is None or k[: -len(".manifest.json")] in only)})
-        snapshots = [Snapshot(s, parse_snapshot_timestamp(s, now)) for s in sids]
+                       if k.endswith(".manifest.json") and "/" not in k})
+        mine = [s for s in sids
+                if (s in only if only is not None else scope.owns(s, place, marked.get(s)))]
+        snapshots = [Snapshot(s, parse_snapshot_timestamp(s, now)) for s in mine]
         for pruned in retention_manager.select_prunable(snapshots, cfg, now):
             for key in list(dest.list_keys(prefix=f"{pruned}.")):
                 dest.delete(key)

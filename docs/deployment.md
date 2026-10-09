@@ -12,7 +12,7 @@ depends on the argument:
 | `create` | Snapshot every job once now (same as `--now`). |
 | `list` / `show <id>` / `verify <id>` | Inspect local snapshots. |
 | `restore <id>` | Restore a snapshot (destructive; `--force` skips the confirm prompt). |
-| `prune` | Apply retention to local snapshots (`--dry-run`, `--keep N`). |
+| `prune` | Apply every job's retention to its own local snapshots (`--job NAME`, `--dry-run`, `--keep N`). |
 | `download <id> <dir>` | Copy a snapshot's archive + manifest out of `/data`. |
 | `config [print] [--show-secrets]` | Print the fully-merged effective config; secrets are masked unless `--show-secrets` is passed. |
 | `healthcheck` | Exit `0` if backups work (see below). |
