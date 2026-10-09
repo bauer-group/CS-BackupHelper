@@ -44,6 +44,8 @@ The engine shells out to the CLI tools. The exact argument vectors are:
 
 Decryption relies on the matching **private key** being available to the tool in the environment where restore runs — the secret keyring for `gpg`, the age identity for `age`.
 
+A tool that fails reports its own error output: in the log line, the job error and the alert, e.g. `gpg exited with 2: gpg: … encryption failed: …`. Up to 1.10.0 that output was not captured and the message ended in `: None`.
+
 ## Restore auto-decrypts by suffix
 
 Restore does not need to be told the encryption mode. It selects the decrypt backend from the artifact's file suffix:
