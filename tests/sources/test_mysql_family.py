@@ -233,6 +233,15 @@ def test_other_servers_keep_the_single_pass(tmp_path, version, version_rc):
     assert gzip.decompress(c.path.read_bytes()) == b"-- tables\n"
 
 
+def test_the_routines_pass_takes_no_table_locks():
+    # mariadb-dump runs LOCK TABLES ... READ LOCAL on every table of a database
+    # unless --single-transaction (or --lock-all-tables) is given — even with
+    # --no-data. That blocks writers and needs the LOCK TABLES privilege.
+    argv = build_routines_argv(MariaDBSource(_cfg()).cfg, "mariadb-dump")
+    assert "--single-transaction" in argv
+    assert not {"--lock-tables", "--lock-all-tables"} & set(argv)
+
+
 def test_routines_argv_targets_every_database():
     src = MariaDBSource(_cfg(database=None, databases=["a", "b"]))
     argv = build_routines_argv(src.cfg, "mariadb-dump")

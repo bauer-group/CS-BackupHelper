@@ -48,10 +48,13 @@ _DUMP_FLAGS = (
 
 # The second pass on MySQL 26+: only the routines (functions, procedures).
 # --force lets mariadb-dump write them although the package query fails.
+# --single-transaction, as in the main pass: without it mariadb-dump runs
+# LOCK TABLES on every table (even with --no-data), which blocks writers and
+# needs the LOCK TABLES privilege.
 _ROUTINES_ONLY_FLAGS = (
-    "--routines", "--skip-triggers", "--no-create-info", "--no-data",
-    "--no-create-db", "--no-tablespaces", "--default-character-set=utf8mb4",
-    "--force",
+    "--single-transaction", "--routines", "--skip-triggers", "--no-create-info",
+    "--no-data", "--no-create-db", "--no-tablespaces",
+    "--default-character-set=utf8mb4", "--force",
 )
 _PACKAGE_QUERY = re.compile(r"Couldn't execute 'SHOW PACKAGE (BODY )?STATUS")
 # What the client prints that is no error: its TLS notice when the password
