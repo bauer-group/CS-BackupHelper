@@ -1,14 +1,21 @@
 """MariaDB / MySQL logical-dump source.
 
-One client (alpine ``mariadb-client``) covers MariaDB 11/12 and MySQL 8/9 via
+One client (alpine ``mariadb-client``) covers MariaDB and MySQL via
 ``mariadb-dump`` (with a ``mysqldump`` fallback). The password is passed via the
 ``MYSQL_PWD`` environment variable, never on the command line.
+
+mariadb-dump takes every server version >= 10.3 for MariaDB and, with
+``--routines``, asks it for MariaDB packages (``SHOW PACKAGE STATUS``). MySQL's
+calendar versions (26.x) are above that, so on MySQL 26+ the query is a syntax
+error and the whole dump fails. For such a server the routines are dumped in a
+second pass, where that one error is expected — see :meth:`MariaDBSource.produce`.
 """
 
 from __future__ import annotations
 
 import gzip
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -39,6 +46,16 @@ _DUMP_FLAGS = (
     "--events", "--no-tablespaces", "--default-character-set=utf8mb4",
 )
 
+# The second pass on MySQL 26+: only the routines (functions, procedures).
+# --force lets mariadb-dump write them although the package query fails.
+_ROUTINES_ONLY_FLAGS = (
+    "--routines", "--skip-triggers", "--no-create-info", "--no-data",
+    "--no-create-db", "--no-tablespaces", "--default-character-set=utf8mb4",
+    "--force",
+)
+_PACKAGE_QUERY = re.compile(r"Couldn't execute 'SHOW PACKAGE (BODY )?STATUS")
+_EX_MYSQLERR = 2  # mariadb-dump's exit code after an SQL error
+
 
 class MySQLFamilyConfig(ConfigModel):
     kind: str = "mariadb"
@@ -66,13 +83,39 @@ def resolve_binary(cfg: MySQLFamilyConfig, which: WhichFn = shutil.which) -> str
     return _BINARY_PREFERENCE.get(cfg.kind, ("mariadb-dump",))[0]
 
 
-def build_argv(cfg: MySQLFamilyConfig, binary: str) -> list[str]:
-    argv = [binary, *_DUMP_FLAGS, "--host", cfg.host, "--port", str(cfg.port), "--user", cfg.user]
+def _connection(cfg: MySQLFamilyConfig) -> list[str]:
+    return ["--host", cfg.host, "--port", str(cfg.port), "--user", cfg.user]
+
+
+def _targets(cfg: MySQLFamilyConfig) -> list[str]:
     if cfg.databases:
-        argv += ["--databases", *cfg.databases]
-    elif cfg.database:
-        argv.append(cfg.database)
-    return argv
+        return ["--databases", *cfg.databases]
+    return [cfg.database] if cfg.database else []
+
+
+def build_argv(cfg: MySQLFamilyConfig, binary: str, routines: bool = True) -> list[str]:
+    flags = [f if routines or f != "--routines" else "--skip-routines" for f in _DUMP_FLAGS]
+    return [binary, *flags, *_connection(cfg), *_targets(cfg)]
+
+
+def build_routines_argv(cfg: MySQLFamilyConfig, binary: str) -> list[str]:
+    return [binary, *_ROUTINES_ONLY_FLAGS, *_connection(cfg), *_targets(cfg)]
+
+
+def needs_separate_routines(server_version: str) -> bool:
+    """True for a MySQL server whose version mariadb-dump mistakes for MariaDB
+    >= 10.3 (MySQL 26+); MariaDB reports "...-MariaDB" in its version."""
+    match = re.match(r"(\d+)\.", server_version.strip())
+    return bool(match) and int(match.group(1)) >= 10 and "mariadb" not in server_version.lower()
+
+
+def only_package_errors(result: subprocess.CompletedProcess) -> bool:
+    """A routines-only pass that failed solely on the MariaDB package query."""
+    lines = (result.stderr or b"").decode("utf-8", "replace").splitlines()
+    package = [line for line in lines if _PACKAGE_QUERY.search(line)]
+    other = [line for line in lines if not _PACKAGE_QUERY.search(line)
+             and ("error" in line.lower() or "couldn't" in line.lower())]
+    return result.returncode == _EX_MYSQLERR and bool(package) and not other
 
 
 class MariaDBSource(Source):
@@ -100,17 +143,42 @@ class MariaDBSource(Source):
         staging_dir.mkdir(parents=True, exist_ok=True)
         out = staging_dir / f"{self.cfg.component_name()}.sql.gz"
         binary = resolve_binary(self.cfg, self._which)
-        argv = build_argv(self.cfg, binary)
         meta = {"engine": self.type, "binary": Path(binary).name}
+        env = self.build_env()
         try:
-            result = self._run(argv, env=self.build_env(), capture_output=True, timeout=self.cfg.timeout)
+            separate = needs_separate_routines(self._server_version(env))
+            result = self._run(build_argv(self.cfg, binary, routines=not separate),
+                               env=env, capture_output=True, timeout=self.cfg.timeout)
+            if result.returncode != 0:
+                return [self._error(out, result.stderr, meta)]
+            dump = result.stdout or b""
+            if separate:
+                # The tables, triggers and events are complete; the routines
+                # follow as a dump of their own (header, USE, footer included).
+                routines = self._run(build_routines_argv(self.cfg, binary),
+                                     env=env, capture_output=True, timeout=self.cfg.timeout)
+                if routines.returncode != 0 and not only_package_errors(routines):
+                    return [self._error(out, routines.stderr, meta)]
+                dump += routines.stdout or b""
+                meta["routines"] = "separate pass (MySQL 26+)"
         except subprocess.TimeoutExpired:
             return [self._error(out, b"dump timed out", meta)]
-        if result.returncode != 0:
-            return [self._error(out, result.stderr, meta)]
         with gzip.open(out, "wb", compresslevel=6) as gz:
-            gz.write(result.stdout or b"")
+            gz.write(dump)
         return [StagedComponent(name=self.cfg.component_name(), kind=self.type, path=out, metadata=meta)]
+
+    def _server_version(self, env: dict[str, str]) -> str:
+        """``SELECT VERSION()`` of the server, or "" if the query fails (the
+        dump then runs as always and reports the real connection error)."""
+        argv = [self._restore_binary(), *_connection(self.cfg), "--batch",
+                "--skip-column-names", "--execute", "SELECT VERSION()"]
+        try:
+            result = self._run(argv, env=env, capture_output=True, timeout=60)
+        except subprocess.TimeoutExpired:
+            return ""
+        if result.returncode != 0:
+            return ""
+        return (result.stdout or b"").decode("utf-8", "replace").strip()
 
     def _error(self, out: Path, stderr: bytes, meta: dict) -> StagedComponent:
         out.unlink(missing_ok=True)
@@ -130,8 +198,7 @@ class MariaDBSource(Source):
         if not dumps:
             raise SourceError(f"no {self.cfg.component_name()}.sql.gz found in {staged_dir}")
         binary = self._restore_binary()
-        argv = [binary, "--host", self.cfg.host, "--port", str(self.cfg.port),
-                "--user", self.cfg.user]
+        argv = [binary, *_connection(self.cfg)]
         if self.cfg.database:
             argv.append(self.cfg.database)
         # gunzip to a real temp file — a subprocess reads the child's stdin fd

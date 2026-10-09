@@ -112,6 +112,8 @@ Logical dump of one or more MariaDB databases. A single Alpine `mariadb-client` 
 
 **Restore.** Supported. Restore uses the interactive client (`mariadb`, fallback `mysql`) and streams the gunzipped `.sql.gz` into it via stdin. If `database` is set it is passed as the target schema.
 
+The dump keeps the `DEFINER` of every trigger, view, event and routine. The restoring `user` must be allowed to create objects for those definers — be the definer itself (objects the application user created), or hold `SET USER` (MariaDB) / `SET_ANY_DEFINER` (MySQL 8.2+; `SET_USER_ID` before) — otherwise the restore stops at the first such object with `Access denied; you need … SET USER`.
+
 ---
 
 ## `mysql`
@@ -133,6 +135,8 @@ MySQL 8/9 via the same MySQL-family implementation as `mariadb`. Identical field
 ```
 
 **Restore.** Supported, as for `mariadb`.
+
+**MySQL 26 and later.** `mariadb-dump` takes every server version from 10.3 up for MariaDB and, with `--routines`, asks the server for MariaDB packages (`SHOW PACKAGE STATUS`). MySQL's calendar versions (26.x) are above that, so the query is a syntax error and the whole dump failed (`Couldn't execute 'SHOW PACKAGE STATUS …' (1064)`). Before each dump the source therefore reads `SELECT VERSION()`; on a MySQL server from version 10 up (MariaDB reports `…-MariaDB`) it dumps the tables, data, triggers and events with `--skip-routines`, then the functions and procedures in a second pass (`--routines --no-create-info --no-data --force`) in which that package query is the only error accepted. Both passes go into the same `<name>.sql.gz` and restore as one; the component's metadata shows `"routines": "separate pass (MySQL 26+)"`. The routines are read in their own transaction, a moment after the data. On every other server the dump is the single pass described above.
 
 > **Authentication.** MySQL logs users in with `caching_sha2_password` by
 > default (since 8.0; `mysql_native_password` is disabled in 8.4 and removed in
