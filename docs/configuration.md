@@ -104,6 +104,7 @@ A container runs **N jobs**; the common case is one. A single job may list sever
   "destinations": [ {"type": "local"}, {"type": "s3", ...} ],
   "keep_local": true,
   "schedule": { ... },
+  "healthcheck_max_age_hours": null,
   "retention": { ... },
   "encryption": { ... },
   "notifications": { ... }
@@ -117,6 +118,7 @@ A container runs **N jobs**; the common case is one. A single job may list sever
 | `destinations` | `[{"type":"local"}]` | Where to store it — `local` and/or `s3`, see [destinations](destinations.md) |
 | `keep_local` | `true` | When `false`, delete the local copy once an off-site S3 destination has stored this snapshot (archive + manifest uploaded, size verified). If none did — S3 unconfigured (empty bucket), unreachable, or the upload failed — the local copy is kept and the run reports a `warning` |
 | `schedule` | see below | When to run |
+| `healthcheck_max_age_hours` | `null` | How old this job's last run may get before the container [healthcheck](deployment.md#the-functional-healthcheck) turns unhealthy, and the grace after the daemon start. `null` uses `BACKUP_HEALTHCHECK_MAX_AGE_HOURS` (default `26`). Set it on a job whose schedule has longer gaps, e.g. `170` for a weekly job next to daily ones |
 | `retention` | see below | How many/long to keep — see [retention](retention.md) |
 | `encryption` | `{"mode":"none"}` | Optional age/gpg — see [encryption](encryption.md) |
 | `notifications` | `{"channels":[]}` | Alerts — see [notifications](notifications.md) |
@@ -139,7 +141,7 @@ A snapshot id is the start of its run in UTC, `YYYY-MM-DD_HH-MM-SS`, e.g. `2026-
 | `on_startup` | `false` | Also run once immediately on container start |
 | `hour` / `minute` / `day_of_week` | `null` | Field-based alternative to a raw cron string |
 
-The container healthcheck expects a run at least every `BACKUP_HEALTHCHECK_MAX_AGE_HOURS` (default `26`). For schedules with longer gaps — e.g. weekly — raise it, see [deployment](deployment.md#choosing-backup_healthcheck_max_age_hours).
+The container healthcheck expects a run of every job at least every `BACKUP_HEALTHCHECK_MAX_AGE_HOURS` (default `26`), or the job's own `healthcheck_max_age_hours`. For schedules with longer gaps — e.g. weekly — raise it, see [deployment](deployment.md#choosing-backup_healthcheck_max_age_hours).
 
 ### Retention
 

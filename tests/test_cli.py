@@ -380,3 +380,47 @@ def test_old_plain_and_new_scoped_snapshots_live_side_by_side(tmp_path, monkeypa
     shutil.rmtree(tmp_path / "db")
     assert runner.invoke(app, ["restore", "2026-07-05_03-00-00", "--force"], env=env).exit_code == 0
     assert (tmp_path / "db" / "db.txt").read_text() == "D"
+
+
+# ── healthcheck: per job ─────────────────────────────────────────────────────
+def _record(dd, job, hours_ago, status="success", failed=()):
+    from datetime import datetime, timedelta, timezone
+
+    from backuphelper.state import RunRecord, record_run
+
+    record_run(dd, RunRecord(job=job, snapshot_id=f"{job}-{hours_ago}", status=status,
+                             started_at=datetime.now(timezone.utc) - timedelta(hours=hours_ago),
+                             failed_components=tuple(failed)))
+
+
+def test_healthcheck_reports_a_failed_job_next_to_a_newer_good_one(tmp_path):
+    # Regression: the newest run of ANY job decided, so another job's good run
+    # hid this job's failure from the container healthcheck.
+    env = _two_jobs_env(tmp_path)
+    dd = tmp_path / "data"
+    _record(dd, "files", 5, "error", failed=["files"])
+    _record(dd, "db", 1)
+    out = runner.invoke(app, ["healthcheck"], env=env)
+    assert out.exit_code == 1
+    assert out.stdout.startswith("unhealthy: job files: the last backup failed")
+
+
+def test_healthcheck_uses_the_jobs_own_max_age(tmp_path):
+    env = _with_job(_env(tmp_path), healthcheck_max_age_hours=170)
+    _record(tmp_path / "data", "main", 100)
+    assert runner.invoke(app, ["healthcheck"], env=env).exit_code == 0
+    assert runner.invoke(app, ["healthcheck"], env=_env_without_job_max_age(env)).exit_code == 1
+
+
+def _env_without_job_max_age(env):
+    cfg = json.loads(env["BACKUP_CONFIG_JSON"])
+    cfg["jobs"][0].pop("healthcheck_max_age_hours")
+    return {**env, "BACKUP_CONFIG_JSON": json.dumps(cfg)}
+
+
+def test_healthcheck_still_judges_the_data_dir_when_the_config_does_not_load(tmp_path):
+    env = {**_env(tmp_path), "BACKUP_CONFIG_JSON": "{not json"}
+    _record(tmp_path / "data", "main", 1)
+    out = runner.invoke(app, ["healthcheck"], env=env)
+    assert out.exit_code == 0 and out.stdout.startswith("healthy: the last backup is fresh")
+    assert "config not loaded" in out.stderr

@@ -16,7 +16,7 @@ from typing import Optional
 
 import typer
 
-from .config.loader import load_config
+from .config.loader import ConfigError, load_config
 from .config.models import Job, RootConfig
 from .healthcheck import check as check_health
 from .integrity.hashing import sha256_file
@@ -285,10 +285,18 @@ def config_cmd(action: str = typer.Argument("print"),
 
 @app.command()
 def healthcheck() -> None:
-    """Exit 0 if backups work (last run fresh and without failed components, or
-    a fresh daemon still in its grace), 1 otherwise; prints the reason."""
+    """Exit 0 if backups work (every job's last run fresh and without failed
+    components, or a fresh daemon still in its grace), 1 otherwise; prints the
+    reason."""
     max_age = float(os.environ.get("BACKUP_HEALTHCHECK_MAX_AGE_HOURS", "26"))
-    health = check_health(data_dir(), max_age)
+    try:
+        jobs = load_config().jobs
+    except (ConfigError, OSError) as exc:
+        # The daemon cannot start with this config either; judge the data dir
+        # without it - all runs together, BACKUP_HEALTHCHECK_MAX_AGE_HOURS.
+        typer.echo(f"config not loaded, all jobs are judged together: {exc}", err=True)
+        jobs = []
+    health = check_health(data_dir(), max_age, jobs=jobs)
     typer.echo(f"{'healthy' if health.healthy else 'unhealthy'}: {health.reason}")
     raise typer.Exit(0 if health.healthy else 1)
 

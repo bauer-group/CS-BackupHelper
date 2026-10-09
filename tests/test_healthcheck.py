@@ -219,3 +219,103 @@ def test_the_check_writes_nothing(tmp_path):
     for max_age in (0.1, 26):
         _check(tmp_path, max_age)
     assert {p: p.stat().st_mtime_ns for p in tmp_path.rglob("*")} == before
+
+
+# ── per job: a max age of its own, and one verdict per job ───────────────────
+def _jobs(*specs):
+    from backuphelper.config.models import Job
+
+    return [Job.model_validate(spec if isinstance(spec, dict) else {"name": spec})
+            for spec in specs]
+
+
+def _check_jobs(dir_, jobs, max_age_hours=26):
+    from backuphelper.healthcheck import check
+
+    return check(dir_, max_age_hours, now=NOW, jobs=jobs)
+
+
+def test_a_failed_job_is_not_masked_by_another_jobs_newer_good_run(tmp_path):
+    # Regression: the newest run across all jobs decided, so the hourly job's
+    # good run turned the check healthy although the nightly job had failed.
+    jobs = _jobs("files-offsite", "database-hourly")
+    _ran(tmp_path, 5, "error", job="files-offsite", failed=["uploads"])
+    _ran(tmp_path, 1, "success", job="database-hourly")
+    health = _check_jobs(tmp_path, jobs)
+    assert not health.healthy
+    assert health.reason.startswith("job files-offsite: the last backup failed")
+    assert "database-hourly" not in health.reason  # only the failing job is named
+    _ran(tmp_path, 0.5, "success", job="files-offsite")
+    health = _check_jobs(tmp_path, jobs)
+    assert health.healthy and "job files-offsite:" in health.reason
+    assert "job database-hourly:" in health.reason
+
+
+def test_a_job_that_stopped_running_is_stale_although_another_job_runs(tmp_path):
+    jobs = _jobs("files-offsite", "database-hourly")
+    _ran(tmp_path, 30, "success", job="files-offsite")
+    _ran(tmp_path, 1, "success", job="database-hourly")
+    health = _check_jobs(tmp_path, jobs)
+    assert not health.healthy and health.reason.startswith("job files-offsite: the last backup is stale")
+
+
+def test_every_job_gets_its_own_grace_after_the_daemon_start(tmp_path):
+    jobs = _jobs("a", "b")
+    _daemon_started(tmp_path, hours_ago=30)
+    _ran(tmp_path, 1, "success", job="a")
+    health = _check_jobs(tmp_path, jobs)
+    assert not health.healthy and health.reason.startswith("job b: no backup has run")
+    _daemon_started(tmp_path, hours_ago=2)
+    assert _check_jobs(tmp_path, jobs).healthy
+
+
+def test_a_job_can_set_its_own_max_age(tmp_path):
+    # A weekly job next to a daily one: its own limit, the env value for the rest.
+    jobs = _jobs({"name": "weekly", "healthcheck_max_age_hours": 170}, "daily")
+    _ran(tmp_path, 100, "success", job="weekly")
+    _ran(tmp_path, 2, "success", job="daily")
+    assert _check_jobs(tmp_path, jobs).healthy
+    _ran(tmp_path, 27, "success", job="daily")
+    health = _check_jobs(tmp_path, jobs)
+    assert not health.healthy and "job daily:" in health.reason and "limit 26 h" in health.reason
+
+
+def test_a_single_job_with_its_own_max_age_uses_it(tmp_path):
+    [job] = _jobs({"name": "main", "healthcheck_max_age_hours": 170})
+    _ran(tmp_path, 100, "success")
+    assert _check_jobs(tmp_path, [job]).healthy
+    assert not _check_jobs(tmp_path, _jobs("main")).healthy  # falls back to the 26 h
+
+
+def test_a_single_job_is_judged_exactly_as_in_1_7_7(tmp_path):
+    # One configured job: every record and manifest counts, the newest decides,
+    # with the same reason text - also a record another (removed) job left.
+    jobs = _jobs("main")
+    _write(tmp_path, "2026-07-06_06-00-00", _ago(6).isoformat())
+    _ran(tmp_path, 5, "error", job="old", failed=["uploads"])
+    assert _check_jobs(tmp_path, jobs) == _check(tmp_path)
+    assert not _check_jobs(tmp_path, jobs).healthy
+    _ran(tmp_path, 1, "success")
+    assert _check_jobs(tmp_path, jobs) == _check(tmp_path)
+    assert _check_jobs(tmp_path, jobs).healthy
+
+
+def test_manifests_count_for_the_job_that_owns_the_snapshot(tmp_path):
+    # A job-scoped manifest counts for the job its id names; a plain one (from
+    # before job-scoped ids) for the first job that stores in the data dir.
+    jobs = _jobs("db", {"name": "files", "destinations": [{"type": "s3", "bucket": "b"}]})
+    _write(tmp_path, "2026-07-06_10-00-00_files", _ago(2).isoformat(), failed=["uploads"])
+    _write(tmp_path, "2026-07-06_11-00-00_db", _ago(1).isoformat())
+    health = _check_jobs(tmp_path, jobs)
+    assert not health.healthy and health.reason.startswith("job files: the last backup failed")
+    _write(tmp_path, "2026-07-06_11-30-00", _ago(0.5).isoformat(), failed=["database"])
+    health = _check_jobs(tmp_path, jobs)
+    assert "job db: the last backup failed: snapshot 2026-07-06_11-30-00" in health.reason
+
+
+def test_records_of_a_job_no_longer_configured_do_not_count_with_several_jobs(tmp_path):
+    jobs = _jobs("a", "b")
+    _ran(tmp_path, 0.5, "error", job="removed", failed=["x"])
+    _ran(tmp_path, 1, "success", job="a")
+    _ran(tmp_path, 1, "success", job="b")
+    assert _check_jobs(tmp_path, jobs).healthy

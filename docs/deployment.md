@@ -77,14 +77,19 @@ HEALTHCHECK --interval=60s --timeout=10s --start-period=20s --retries=3 \
    check stays unhealthy until a newer run ends in `success` or `warning`.
    Warnings — an unreachable S3 destination while the local copy exists,
    skipped unreadable files, the encryption fallback — are not failures.
-3. **The most recent run is stale.** It started more than
-   `BACKUP_HEALTHCHECK_MAX_AGE_HOURS` ago (default **26** — one daily run plus a
+3. **The most recent run is stale.** It started more than the max age ago:
+   the job's `healthcheck_max_age_hours`, else
+   `BACKUP_HEALTHCHECK_MAX_AGE_HOURS` (default **26** — one daily run plus a
    margin).
 4. **No backup has run yet and the grace is over.** A daemon that has not run a
-   backup yet is healthy for `BACKUP_HEALTHCHECK_MAX_AGE_HOURS` after its start,
-   unhealthy afterwards. Without a recorded daemon start — e.g.
+   backup yet is healthy for the max age after its start, unhealthy afterwards.
+   Without a recorded daemon start — e.g.
    `docker compose run --rm backup healthcheck` on a volume no daemon has used —
    it is unhealthy right away.
+
+With several jobs, rules 2–4 apply to every configured job on its own (see
+[below](#where-the-most-recent-run-comes-from)), and the check is unhealthy as
+soon as one job is.
 
 Otherwise it exits `0`. Either way it prints one line with the verdict and the
 reason, which `docker inspect --format '{{json .State.Health}}' <container>`
@@ -93,6 +98,10 @@ shows:
 ```text
 unhealthy: the last backup failed: snapshot 2026-07-05_03-15-00 (job main) at 2026-07-05T03:15:00+00:00: failed component(s): database
 ```
+
+With several jobs the line has one part per job (`job <name>: <reason>`,
+separated by `;`) — only the unhealthy jobs when it is unhealthy, every job
+when it is healthy.
 
 The check only reads: it writes nothing and opens no network connection.
 
@@ -110,25 +119,40 @@ The check only reads: it writes nothing and opens no network connection.
   `error`; manifests written before 1.7.7 have no `status` and count by their
   components.
 
-The newest of both by start time, across **all jobs** that share the data dir,
-decides; on equal times the run record wins. With several jobs, a newer good run
-of one job therefore turns the check healthy again although another job's last
-run failed — that failure was still alerted at error level.
+The newest of both by start time decides; on equal times the run record wins.
+
+- **One job** (or no loadable config): every record and manifest in the data
+  dir counts, as up to 1.7.7.
+- **Several jobs**: each configured job is judged by its own run record and the
+  manifests of its own snapshots — a [job-scoped id](configuration.md#snapshot-ids)
+  names its job; a plain manifest from before job-scoped ids counts for the job
+  that owns it (see [retention per job](retention.md#retention-applies-per-job-and-destination)).
+  A failed or stale job keeps the container unhealthy until that job runs
+  successfully again, whatever the other jobs do. Up to 1.7.7 the newest run of
+  any job decided, so another job's newer good run hid the failure. Run records
+  of a job that is no longer configured are ignored.
+
+The check loads the job config (like the daemon) for the job names and their
+max ages. If it cannot — the config is invalid, so the daemon cannot start with
+it either — it judges the data dir as a whole with
+`BACKUP_HEALTHCHECK_MAX_AGE_HOURS` and notes the config error on stderr.
 
 `keep_local: false` and S3-only jobs leave no local manifest after a successful
 upload; their run records keep them monitored, so a job that stops running turns
-the check unhealthy after `BACKUP_HEALTHCHECK_MAX_AGE_HOURS`. During an S3 outage
+the check unhealthy after its max age. During an S3 outage
 their runs end in `warning` and keep a fallback copy in `/data`, so the check
 stays healthy; once S3 is back the copies are uploaded and removed (see
 [destinations](destinations.md#catching-up-after-an-s3-outage)).
 
 ### Choosing `BACKUP_HEALTHCHECK_MAX_AGE_HOURS`
 
-The value is both the staleness limit and the grace after a daemon start, so set
-it above the longest gap between two scheduled runs plus a margin for the run
-itself:
+The max age is both the staleness limit and the grace after a daemon start, so
+set it above the longest gap between two scheduled runs plus a margin for the
+run itself. `BACKUP_HEALTHCHECK_MAX_AGE_HOURS` sets it for every job; a job's
+`healthcheck_max_age_hours` overrides it for that job — e.g. a weekly job next
+to hourly ones:
 
-| Schedule | `BACKUP_HEALTHCHECK_MAX_AGE_HOURS` |
+| Schedule | `BACKUP_HEALTHCHECK_MAX_AGE_HOURS` / `healthcheck_max_age_hours` |
 | --- | --- |
 | every 6 hours | `8` |
 | daily (the default `15 3 * * *`) | `26` (default) |
@@ -137,6 +161,17 @@ itself:
 ```yaml
 environment:
   BACKUP_HEALTHCHECK_MAX_AGE_HOURS: "170"   # weekly schedule
+```
+
+Per job (sources and destinations left out):
+
+```json
+{"jobs": [
+  {"name": "database-hourly", "schedule": {"mode": "interval", "interval_hours": 1},
+   "healthcheck_max_age_hours": 3},
+  {"name": "files-weekly", "schedule": {"cron": "0 2 * * 0"},
+   "healthcheck_max_age_hours": 170}
+]}
 ```
 
 With the default `26`, a weekly job turns unhealthy one day after every run and
