@@ -143,6 +143,8 @@ Mirrors a full S3 (or S3-compatible) bucket into a `<name>.tar.gz` component —
 | `secret_key` | `""` | secret access key |
 | `prefix` | `""` | only mirror keys under this prefix |
 | `force_path_style` | `true` | path-style addressing (needed for MinIO/Ceph); `false` uses virtual-host style |
+| `verify_tls` | `true` | verify the endpoint's TLS certificate; `false` switches verification off (insecure, logs a warning) |
+| `ca_bundle` | `null` | path to a PEM file with the CA certificate(s) to trust for the endpoint, e.g. a private CA |
 | `name` | `"s3"` | component name |
 
 ```json
@@ -159,6 +161,8 @@ Mirrors a full S3 (or S3-compatible) bucket into a `<name>.tar.gz` component —
   ]
 }
 ```
+
+`verify_tls` and `ca_bundle` work as for the s3 destination, including the security warning about switching verification off: see [TLS certificate verification](destinations.md#tls-certificate-verification).
 
 **Restore.** Supported. Each captured object is re-uploaded with `put_object`, re-applying its content headers (`ContentType`, `ContentDisposition`, `CacheControl`, `ContentEncoding`, `ContentLanguage`), user metadata (`Metadata`) and tags (`Tagging`) from `metadata.json`. Objects are restored into the configured `bucket`.
 
