@@ -35,7 +35,8 @@ Dumps a single PostgreSQL database with `pg_dump`. The password is placed in the
 | `ssl_mode` | `"disable"` | → `PGSSLMODE` |
 | `dump_format` | `"custom"` | `custom` (`pg_dump --format=custom --compress=6`) or `plain` (SQL, gzipped) |
 | `timeout` | `1800` | dump timeout in seconds (1–14400) |
-| `name` | `"database"` | component name / output basename |
+| `name` | `null` | component name / output basename (`<name>.dump` or `<name>.sql.gz`); defaults to the `database` name |
+| `exclude_table_data` | `[]` | tables whose rows are left out while their structure is kept (`pg_dump --exclude-table-data`); a list or a comma-separated string |
 | `keep_acl` | `false` | dump the privileges (`GRANT`/`REVOKE`, `ALTER DEFAULT PRIVILEGES`) and re-apply them on restore — see [Privileges](#privileges-keep_acl) |
 
 ```json
