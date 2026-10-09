@@ -76,6 +76,8 @@ Ships artifacts to any S3-compatible bucket. The upload path is deliberately **h
 | `secret_key` | `""` | secret access key |
 | `prefix` | `""` | key prefix; transparently prepended to every key |
 | `force_path_style` | `true` | path-style addressing (needed for MinIO/Ceph); `false` uses virtual-host style |
+| `verify_tls` | `true` | verify the endpoint's TLS certificate; `false` switches verification off — see [TLS certificate verification](#tls-certificate-verification) |
+| `ca_bundle` | `null` | path to a PEM file with the CA certificate(s) to trust for the endpoint, e.g. a private CA (ignored when `verify_tls` is `false`) |
 | `multipart_threshold` | `104857600` | `100 * 1024 * 1024` (100 MiB): files below this take a single `put_object` |
 | `multipart_chunk_size` | `52428800` | `50 * 1024 * 1024` (50 MiB): size of each multipart part |
 | `ensure_bucket` | `true` | create the bucket on first use if it does not exist |
@@ -117,6 +119,34 @@ The client is built with **path-style addressing** (when `force_path_style` is t
 - **Cloudflare R2, Backblaze B2, Wasabi** — set `endpoint` to the provider's S3 URL and the matching `region`.
 
 When `ensure_bucket` is true, the destination checks the bucket with `head_bucket` on startup and creates it if missing (adding a `LocationConstraint` for any region other than `us-east-1`). Set `ensure_bucket: false` if the credentials are not allowed to create buckets. If the check or the creation fails, the destination is skipped for that run (see [When a destination fails](#when-a-destination-fails)).
+
+### TLS certificate verification
+
+An `https://` endpoint's certificate is verified, as before these options existed: against boto3's default CA bundle, or the file the `AWS_CA_BUNDLE` environment variable names. The same two fields exist on the [`s3` source](sources.md#s3).
+
+- **Private CA** (a self-hosted MinIO or Ceph behind an internal PKI): mount the CA certificate into the container and set `ca_bundle` to its path. The file *replaces* the default bundle for this endpoint, so it must contain every CA the endpoint's chain needs. A path that does not exist is an error (the destination is skipped for the run).
+- **No verification**: `"verify_tls": false` switches the check off. Every run logs a warning, and urllib3 adds an `InsecureRequestWarning`.
+
+> **Security warning.** Without verification the connection is still encrypted, but the
+> server is no longer authenticated: anyone on the network path can impersonate the
+> endpoint, read and alter the backup archives, and capture the S3 credentials. Use it
+> only for a short test or a trusted, isolated network, and prefer `ca_bundle` — it keeps
+> the protection with a self-signed or private-CA certificate.
+
+```json
+{
+  "destinations": [
+    {
+      "type": "s3",
+      "endpoint": "https://minio.internal:9000",
+      "bucket": "offsite",
+      "access_key": "${S3_ACCESS_KEY}",
+      "secret_key": "${S3_SECRET_KEY}",
+      "ca_bundle": "/certs/internal-ca.pem"
+    }
+  ]
+}
+```
 
 ```bash
 # List and verify snapshots across local + remote destinations

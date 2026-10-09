@@ -17,13 +17,10 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 from urllib.parse import quote, urlencode
 
-import boto3
-from botocore.client import Config
 from botocore.exceptions import ClientError
-from pydantic import Field
 
 from ..archive.bundle import create_bundle
-from ..config.models import ConfigModel
+from ..net.s3 import S3ConnectionConfig, build_s3_client
 from .base import Source, StagedComponent
 
 # Object headers a client acts on — Outline, for one, stores attachments of unsafe
@@ -48,14 +45,9 @@ _TAGGING_UNAVAILABLE_CODES = frozenset({
 _TAGGING_UNAVAILABLE_STATUS = frozenset({403, 405, 501})
 
 
-class S3SourceConfig(ConfigModel):
+class S3SourceConfig(S3ConnectionConfig):
     bucket: str
-    endpoint: Optional[str] = None
-    region: str = "eu-central-1"
-    access_key: str = ""
-    secret_key: str = ""
     prefix: str = ""
-    force_path_style: bool = True
     name: str = "s3"
 
 
@@ -68,15 +60,7 @@ class S3BucketSource(Source):
         self._client = client or self._build_client()
 
     def _build_client(self) -> Any:
-        style = "path" if self.cfg.force_path_style else "auto"
-        return boto3.client(
-            "s3",
-            endpoint_url=self.cfg.endpoint or None,
-            aws_access_key_id=self.cfg.access_key or None,
-            aws_secret_access_key=self.cfg.secret_key or None,
-            region_name=self.cfg.region,
-            config=Config(s3={"addressing_style": style}, signature_version="s3v4"),
-        )
+        return build_s3_client(self.cfg)
 
     @property
     def component_name(self) -> str:
