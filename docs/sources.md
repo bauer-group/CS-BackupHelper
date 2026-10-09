@@ -132,7 +132,7 @@ MySQL 8/9 via the same MySQL-family implementation as `mariadb`. Identical field
 
 ## `s3`
 
-Mirrors a full S3 (or S3-compatible) bucket into a `<name>.tar.gz` component — and, unlike a plain key-only mirror, **preserves per-object metadata**. For every object it captures the content-type, user metadata, storage class, ETag and object tags into a deterministic `metadata.json`, and faithfully re-applies them on restore. Works against any S3-compatible endpoint (AWS, MinIO, Ceph/RGW, R2, B2, Wasabi, Garage) via path-style addressing + SigV4.
+Mirrors a full S3 (or S3-compatible) bucket into a `<name>.tar.gz` component — and, unlike a plain key-only mirror, **preserves per-object metadata**. For every object it captures the content headers (`Content-Type`, `Content-Disposition`, `Cache-Control`, `Content-Encoding`, `Content-Language`), user metadata, storage class, ETag and object tags into a deterministic `metadata.json`, and faithfully re-applies them on restore. Works against any S3-compatible endpoint (AWS, MinIO, Ceph/RGW, R2, B2, Wasabi, Garage) via path-style addressing + SigV4.
 
 | field | default | description |
 | --- | --- | --- |
@@ -160,7 +160,9 @@ Mirrors a full S3 (or S3-compatible) bucket into a `<name>.tar.gz` component —
 }
 ```
 
-**Restore.** Supported. Each captured object is re-uploaded with `put_object`, re-applying its content-type (`ContentType`), user metadata (`Metadata`) and tags (`Tagging`) from `metadata.json`. Objects are restored into the configured `bucket`.
+**Restore.** Supported. Each captured object is re-uploaded with `put_object`, re-applying its content headers (`ContentType`, `ContentDisposition`, `CacheControl`, `ContentEncoding`, `ContentLanguage`), user metadata (`Metadata`) and tags (`Tagging`) from `metadata.json`. Objects are restored into the configured `bucket`.
+
+The content headers decide how a client treats an object: Outline, for example, stores attachments of types a browser would render (HTML, SVG) with `Content-Disposition: attachment`, so they are downloaded instead of rendered. Snapshots taken with 1.7.7 or earlier captured only `Content-Type`; their objects restore without the other four headers.
 
 ---
 

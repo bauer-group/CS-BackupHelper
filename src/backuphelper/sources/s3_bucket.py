@@ -1,9 +1,11 @@
 """S3-bucket source — full-bucket mirror that PRESERVES per-object metadata.
 
 Unlike every existing fleet tool (which mirrors object keys only), this captures
-content-type, user metadata, tags and storage class into ``metadata.json`` and
-faithfully re-applies them on restore. Works against any S3-compatible endpoint
-(AWS, MinIO, R2, B2, Wasabi, Garage) via path-style + SigV4.
+content-type, the other content headers (Content-Disposition, Cache-Control,
+Content-Encoding, Content-Language), user metadata, tags and storage class into
+``metadata.json`` and faithfully re-applies them on restore. Works against any
+S3-compatible endpoint (AWS, MinIO, R2, B2, Wasabi, Garage) via path-style +
+SigV4.
 """
 
 from __future__ import annotations
@@ -20,6 +22,18 @@ from pydantic import Field
 from ..archive.bundle import create_bundle
 from ..config.models import ConfigModel
 from .base import Source, StagedComponent
+
+# Object headers a client acts on — Outline, for one, stores attachments of unsafe
+# types with "Content-Disposition: attachment" so a browser downloads them instead
+# of rendering them. Captured on backup and re-applied on restore:
+# metadata.json key -> get_object response field / put_object parameter.
+_CONTENT_HEADERS = {
+    "content_type": "ContentType",
+    "content_disposition": "ContentDisposition",
+    "cache_control": "CacheControl",
+    "content_encoding": "ContentEncoding",
+    "content_language": "ContentLanguage",
+}
 
 
 class S3SourceConfig(ConfigModel):
@@ -90,15 +104,17 @@ class S3BucketSource(Source):
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(resp["Body"].read())
         tags = self._client.get_object_tagging(Bucket=self.cfg.bucket, Key=key).get("TagSet", [])
-        return {
+        entry = {
             "key": key,
             "size": resp.get("ContentLength", dest.stat().st_size),
-            "content_type": resp.get("ContentType"),
             "metadata": dict(resp.get("Metadata", {})),
             "storage_class": resp.get("StorageClass"),
             "etag": resp.get("ETag"),
             "tags": {t["Key"]: t["Value"] for t in tags},
         }
+        for field, header in _CONTENT_HEADERS.items():
+            entry[field] = resp.get(header)
+        return entry
 
     def restore(self, staged_dir: Path) -> None:
         manifest = json.loads((Path(staged_dir) / "metadata.json").read_text())
@@ -107,8 +123,10 @@ class S3BucketSource(Source):
             key = obj["key"]
             body = (objects_dir / key).read_bytes()
             extra: dict[str, Any] = {}
-            if obj.get("content_type"):
-                extra["ContentType"] = obj["content_type"]
+            # A snapshot taken before a header was captured simply lacks its key.
+            for field, header in _CONTENT_HEADERS.items():
+                if obj.get(field):
+                    extra[header] = obj[field]
             if obj.get("metadata"):
                 extra["Metadata"] = obj["metadata"]
             if obj.get("tags"):
