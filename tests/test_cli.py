@@ -307,6 +307,57 @@ def test_a_single_job_keeps_plain_timestamp_ids(tmp_path, monkeypatch):
     assert runner.invoke(app, ["list"], env=env).stdout.split()[0] == "2026-07-06_03-00-00"
 
 
+def test_prune_without_job_prunes_each_jobs_own_snapshots_by_its_own_policy(tmp_path,
+                                                                            monkeypatch):
+    # Regression: prune applied the FIRST job's retention to every snapshot in
+    # the data dir, so the other job's snapshots were pruned by a foreign policy.
+    from datetime import datetime, timezone
+
+    env = _two_jobs_env(tmp_path)
+    for day in (1, 2, 3):  # the runs keep everything (default count 14)
+        _freeze_runs_at(monkeypatch, datetime(2026, 7, day, 3, 0, 0, tzinfo=timezone.utc))
+        assert runner.invoke(app, ["create"], env=env).exit_code == 0
+    cfg = json.loads(env["BACKUP_CONFIG_JSON"])
+    cfg["jobs"][0]["retention"] = {"count": 1}
+    cfg["jobs"][1]["retention"] = {"count": 2}
+    out = runner.invoke(app, ["prune"], env={**env, "BACKUP_CONFIG_JSON": json.dumps(cfg)})
+    assert out.exit_code == 0
+    assert _ids(env) == ["2026-07-02_03-00-00_files", "2026-07-03_03-00-00_db",
+                         "2026-07-03_03-00-00_files"]
+
+
+def test_prune_with_job_prunes_only_that_jobs_snapshots(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+
+    env = _two_jobs_env(tmp_path)
+    for day in (1, 2, 3):
+        _freeze_runs_at(monkeypatch, datetime(2026, 7, day, 3, 0, 0, tzinfo=timezone.utc))
+        assert runner.invoke(app, ["create"], env=env).exit_code == 0
+    dry = runner.invoke(app, ["prune", "--job", "files", "--keep", "1", "--dry-run"], env=env)
+    assert dry.exit_code == 0
+    assert dry.stdout.splitlines() == ["would prune 2026-07-01_03-00-00_files",
+                                       "would prune 2026-07-02_03-00-00_files"]
+    assert runner.invoke(app, ["prune", "--job", "files", "--keep", "1"], env=env).exit_code == 0
+    assert _ids(env) == ["2026-07-01_03-00-00_db", "2026-07-02_03-00-00_db",
+                         "2026-07-03_03-00-00_db", "2026-07-03_03-00-00_files"]
+    unknown = runner.invoke(app, ["prune", "--job", "nope"], env=env)
+    assert unknown.exit_code == 1 and "no job named 'nope'" in unknown.stdout
+
+
+def test_prune_of_a_single_job_is_unchanged(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+
+    env = _env(tmp_path)
+    for day in (1, 2, 3, 4):
+        _freeze_runs_at(monkeypatch, datetime(2026, 7, day, 3, 0, 0, tzinfo=timezone.utc))
+        assert runner.invoke(app, ["create"], env=env).exit_code == 0
+    dry = runner.invoke(app, ["prune", "--keep", "2", "--dry-run"], env=env)
+    assert dry.stdout.splitlines() == ["would prune 2026-07-01_03-00-00",
+                                       "would prune 2026-07-02_03-00-00"]
+    assert runner.invoke(app, ["prune", "--keep", "2"], env=env).exit_code == 0
+    assert _ids(env) == ["2026-07-03_03-00-00", "2026-07-04_03-00-00"]
+
+
 def test_old_plain_and_new_scoped_snapshots_live_side_by_side(tmp_path, monkeypatch):
     # A deployment that grows from one job to two keeps its old snapshots
     # listable, verifiable and restorable next to the new job-scoped ones.

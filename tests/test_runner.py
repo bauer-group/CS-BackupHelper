@@ -685,6 +685,94 @@ def test_fallback_retention_never_prunes_other_jobs_snapshots(tmp_path, monkeypa
     assert left - {_sid(h)[1] for h in range(10)} == set(fallback_ids[1:])  # own count=2
 
 
+def _freeze_runs_at(monkeypatch, when):
+    """Every run starts at ``when`` - all jobs of one --now fire in that second."""
+    import datetime as dt
+
+    import backuphelper.runner as runner_module
+
+    class Frozen(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return when if tz else when.replace(tzinfo=None)
+
+    monkeypatch.setattr(runner_module, "datetime", Frozen)
+
+
+def _env_job(name, **over):
+    return {"name": name, "sources": [{"type": "env", "name": "env", "whitelist": []}],
+            "destinations": [{"type": "local"}], **over}
+
+
+def _left(data):
+    return sorted(p.name[: -len(".manifest.json")] for p in data.glob("*.manifest.json"))
+
+
+def test_local_retention_of_one_job_never_prunes_another_jobs_snapshots(tmp_path, monkeypatch):
+    # Regression: the retention of a job with a local destination worked on the
+    # whole data dir, so a job with count 2 also pruned the other job's
+    # snapshots down to the newest two - whatever the other job's own policy.
+    from backuphelper.cli import run_all_now
+    from backuphelper.config.models import RootConfig
+
+    data = tmp_path / "data"
+    cfg = RootConfig.model_validate({"jobs": [_env_job("db", retention={"count": 2}),
+                                              _env_job("files", retention={"count": 10})]})
+    for hour in range(5):
+        _freeze_runs_at(monkeypatch, _sid(hour)[0])
+        assert run_all_now(cfg, data) == 0
+    assert _left(data) == sorted([f"{_sid(h)[1]}_db" for h in (3, 4)]
+                                 + [f"{_sid(h)[1]}_files" for h in range(5)])
+
+
+def test_s3_retention_of_one_job_never_prunes_another_jobs_snapshots(tmp_path, monkeypatch):
+    # Two S3-only jobs sharing one bucket and prefix: each prunes its own.
+    from backuphelper.cli import run_all_now
+    from backuphelper.config.models import RootConfig
+    from backuphelper.destinations.s3 import S3Destination
+
+    bucket = _MemoryS3()
+    monkeypatch.setattr(S3Destination, "_build_client", lambda self: bucket)
+    cfg = RootConfig.model_validate({"jobs": [
+        _env_job("db", destinations=[_s3_dest()], retention={"count": 1}),
+        _env_job("files", destinations=[_s3_dest()], retention={"count": 3})]})
+    for hour in range(4):
+        _freeze_runs_at(monkeypatch, _sid(hour)[0])
+        assert run_all_now(cfg, tmp_path / "data") == 0
+    remote = sorted(k[: -len(".manifest.json")] for k in bucket.objects
+                    if k.endswith(".manifest.json"))
+    assert remote == sorted([f"{_sid(3)[1]}_db"] + [f"{_sid(h)[1]}_files" for h in (1, 2, 3)])
+
+
+def test_old_plain_snapshots_go_to_the_first_job_that_stores_there(tmp_path, monkeypatch):
+    # Snapshots from before job-scoped ids have plain ids. In a multi-job config
+    # they count as the first job's that stores in that place - except a
+    # fallback copy, which belongs to the job its pending marker names.
+    from backuphelper.cli import run_all_now
+    from backuphelper.config.models import RootConfig
+    from backuphelper.destinations.s3 import S3Destination
+
+    data = tmp_path / "data"
+    db = _env_job("db", retention={"count": 2})
+    files = _env_job("files", destinations=[_s3_dest()], retention={"count": 5})
+    for hour in range(3):  # 1.7.7-style plain ids of the local job
+        run_job(Job.model_validate(db), data_dir=data, instance_name="i", now=_sid(hour)[0],
+                snapshot_id=_sid(hour)[1])
+    monkeypatch.setattr(S3Destination, "_build_client", lambda self: _ForbiddenS3())
+    run_job(Job.model_validate(files), data_dir=data, instance_name="i",  # a fallback copy
+            now=_sid(3)[0], snapshot_id=_sid(3)[1])
+    assert (data / f"{_sid(3)[1]}.offsite-pending.json").exists()
+
+    cfg = RootConfig.model_validate({"jobs": [db, files]})
+    for hour in (4, 5):
+        _freeze_runs_at(monkeypatch, _sid(hour)[0])
+        run_all_now(cfg, data)
+    left = _left(data)
+    assert [s for s in left if s.endswith("_db")] == [f"{_sid(4)[1]}_db", f"{_sid(5)[1]}_db"]
+    assert _sid(3)[1] in left  # the other job's pending fallback copy survives
+    assert not any(_sid(h)[1] in left for h in range(3))  # the old plain ones were db's
+
+
 def test_pending_snapshot_is_uploaded_once_s3_is_back(tmp_path, monkeypatch):
     # An S3-only job's fallback copy must not stay in the data dir forever: it
     # would never reach the bucket, and its ageing manifest would turn the

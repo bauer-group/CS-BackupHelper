@@ -31,7 +31,7 @@ from .runner import (
     restore_snapshot,
     run_job,
 )
-from .snapshots import job_slug, parse_snapshot_id, scope_for
+from .snapshots import LOCAL, job_slug, parse_snapshot_id, pending_owners, scope_for
 from .state import record_daemon_start
 
 app = typer.Typer(add_completion=False, help="BAUER GROUP central backup engine")
@@ -228,31 +228,41 @@ def download(snapshot_id: str, dest: Path = typer.Argument(..., help="target dir
 
 @app.command()
 def prune(keep: Optional[int] = typer.Option(None, "--keep"),
-          dry_run: bool = typer.Option(False, "--dry-run")) -> None:
-    """Apply retention to local snapshots."""
+          dry_run: bool = typer.Option(False, "--dry-run"),
+          job: Optional[str] = typer.Option(
+              None, "--job", help="prune only this job's snapshots (default: every job's)")) -> None:
+    """Apply retention to local snapshots: every job's own snapshots by its own
+    policy, never another job's."""
     from .retention import Snapshot
     from .retention import manager as rm
+    from .runner import parse_snapshot_timestamp
 
     dd = data_dir()
     cfg = load_config()
-    retention = cfg.jobs[0].retention if cfg.jobs else None
-    if retention is None:
+    if not cfg.jobs:
         typer.echo("no jobs configured")
         return
-    if keep is not None:
-        retention = retention.model_copy(update={"count": keep})
-    from .runner import parse_snapshot_timestamp
+    targets = [j for j in cfg.jobs if job is None or j.name == job]
+    if not targets:
+        typer.echo(f"no job named {job!r} configured")
+        raise typer.Exit(1)
 
     now = datetime.now(timezone.utc)
     sids = sorted(m.name[: -len(".manifest.json")] for m in dd.glob("*.manifest.json"))
-    # Parse the real timestamp from the id so age/GFS behave as in the daemon.
-    snaps = [Snapshot(s, parse_snapshot_timestamp(s, now)) for s in sids]
-    pruned = rm.select_prunable(snaps, retention, now)
-    for sid in sorted(pruned):
-        typer.echo(f"{'would prune' if dry_run else 'pruning'} {sid}")
-        if not dry_run:
-            for p in dd.glob(f"{sid}.*"):
-                p.unlink(missing_ok=True)
+    marked = pending_owners(dd)
+    for target in targets:
+        retention = target.retention
+        if keep is not None:
+            retention = retention.model_copy(update={"count": keep})
+        scope = scope_for(cfg.jobs, target)
+        # Parse the real timestamp from the id so age/GFS behave as in the daemon.
+        snaps = [Snapshot(s, parse_snapshot_timestamp(s, now)) for s in sids
+                 if scope.owns(s, LOCAL, marked.get(s))]
+        for sid in sorted(rm.select_prunable(snaps, retention, now)):
+            typer.echo(f"{'would prune' if dry_run else 'pruning'} {sid}")
+            if not dry_run:
+                for p in dd.glob(f"{sid}.*"):
+                    p.unlink(missing_ok=True)
 
 
 @app.command("config")

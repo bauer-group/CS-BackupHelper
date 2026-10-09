@@ -4,10 +4,12 @@ from datetime import datetime, timezone
 
 from backuphelper.config.models import Job
 from backuphelper.snapshots import (
+    LOCAL,
     SnapshotScope,
     job_slug,
     new_snapshot_id,
     parse_snapshot_id,
+    s3_place,
     scope_for,
 )
 
@@ -42,9 +44,52 @@ def test_ids_the_engine_did_not_generate_have_no_time_or_job():
 def test_only_a_config_with_several_jobs_scopes_its_ids():
     one, two = Job(name="main"), Job(name="files")
     assert scope_for([one], one) == SnapshotScope("main", scoped=False)
-    assert scope_for([one, two], two) == SnapshotScope("files", scoped=True)
+    assert scope_for([one, two], two).scoped is True
     assert scope_for([one], one).new_id(NOW) == "2026-07-06_03-00-00"
     assert scope_for([one, two], one).new_id(NOW) == "2026-07-06_03-00-00_main"
+
+
+# ── ownership ────────────────────────────────────────────────────────────────
+def _job(name, *destinations):
+    return Job.model_validate({"name": name, "destinations": list(destinations)})
+
+
+LOCAL_DEST = {"type": "local"}
+OFFSITE = {"type": "s3", "bucket": "offsite", "prefix": "files/"}
+OFFSITE_PLACE = s3_place(None, "offsite", "files/")
+
+
+def test_a_single_job_owns_every_snapshot_but_another_jobs_scoped_ones():
+    main = _job("main", LOCAL_DEST)
+    scope = scope_for([main], main)
+    for sid in ("2026-07-05_03-15-00", "s1", "2026-07-05_03-15-00_main"):
+        assert scope.owns(sid) and scope.owns(sid, OFFSITE_PLACE, marked_for="other"), sid
+    assert not scope.owns("2026-07-05_03-15-00_files")
+
+
+def test_with_several_jobs_a_scoped_id_belongs_to_the_job_it_names():
+    db, files = _job("db.hourly", LOCAL_DEST), _job("files", LOCAL_DEST)
+    sid = new_snapshot_id(NOW, "db.hourly")
+    assert scope_for([db, files], db).owns(sid)
+    assert not scope_for([db, files], files).owns(sid)
+
+
+def test_with_several_jobs_a_plain_id_belongs_to_the_first_job_storing_there():
+    # examples/config/multi-job.json: a local-only job, then an S3-only job.
+    db, files = _job("db", LOCAL_DEST), _job("files", OFFSITE)
+    db_scope, files_scope = scope_for([db, files], db), scope_for([db, files], files)
+    legacy = "2026-07-01_03-00-00"
+    assert db_scope.owns(legacy, LOCAL) and not files_scope.owns(legacy, LOCAL)
+    assert files_scope.owns(legacy, OFFSITE_PLACE) and not db_scope.owns(legacy, OFFSITE_PLACE)
+    # a fallback copy in the data dir belongs to the job its pending marker names
+    assert files_scope.owns(legacy, LOCAL, marked_for="files")
+    assert not db_scope.owns(legacy, LOCAL, marked_for="files")
+
+
+def test_two_jobs_in_one_place_leave_plain_ids_to_the_first():
+    a, b = _job("a", LOCAL_DEST, OFFSITE), _job("b", LOCAL_DEST, OFFSITE)
+    assert scope_for([a, b], a).plain_at == frozenset({LOCAL, OFFSITE_PLACE})
+    assert scope_for([a, b], b).plain_at == frozenset()
 
 
 def test_scoped_ids_sort_by_time_among_plain_ones():

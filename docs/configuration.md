@@ -150,6 +150,8 @@ The container healthcheck expects a run at least every `BACKUP_HEALTHCHECK_MAX_A
 | `gfs.daily` / `gfs.weekly` / `gfs.monthly` | `0` | Grandfather-father-son keep-counts per tier |
 | `smart_last` | `true` | Never prune the sole/last backup |
 
+A job's retention only ever prunes that job's own snapshots, on every destination, also when several jobs share the data dir or an S3 bucket and prefix — see [retention per job](retention.md#retention-applies-per-job-and-destination).
+
 ## Run modes
 
 The same config drives all modes:
