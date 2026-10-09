@@ -4,6 +4,28 @@ All notable changes to this project are documented here. This file is maintained
 automatically by [semantic-release](https://github.com/semantic-release/semantic-release)
 on every release to `main`.
 
+## [1.10.1](https://github.com/bauer-group/CS-BackupHelper/compare/v1.10.0...v1.10.1) (2026-10-09)
+
+### 🐛 Bug Fixes
+
+* **encryption:** encrypted to imported gpg keys without ownertrust ([9322e5a](https://github.com/bauer-group/CS-BackupHelper/commit/9322e5ac59116cd34c4abe67d9a3a07ab0c00fa6))
+* **encryption:** restored age snapshots with an identity file ([954a9c9](https://github.com/bauer-group/CS-BackupHelper/commit/954a9c947064c35049a77d6b1a4d727730b61b0c))
+* **encryption:** surfaced the tool's error output in failures ([e07c6b1](https://github.com/bauer-group/CS-BackupHelper/commit/e07c6b16d80ff3ba1d2806998a59ff19ed7646bd))
+* **notify:** bounded HTTP alert deliveries by a timeout ([fdf3276](https://github.com/bauer-group/CS-BackupHelper/commit/fdf32766f01ca7d47f0692eb801721bd40d0e696))
+* **runner:** kept the decrypt helper callable without a job ([1d0ea43](https://github.com/bauer-group/CS-BackupHelper/commit/1d0ea43dafc57baae8247ea73ba11c56739b2686))
+* **runner:** logged why a source component failed ([a6d4a7b](https://github.com/bauer-group/CS-BackupHelper/commit/a6d4a7b8108f6e58ba9355722b4bc5667b33443e))
+* **runner:** reported the run's duration in alerts ([0233252](https://github.com/bauer-group/CS-BackupHelper/commit/0233252582cf9628ce41a6a0a509042616940dee))
+
+### 💄 UI/UX Improvements
+
+* **notify:** put the nosec marker back on the urlopen call ([8637551](https://github.com/bauer-group/CS-BackupHelper/commit/863755196fd773ef9070db940daaae86087c45b2))
+
+### 🔧 Maintenance
+
+* **ci:** bump actions/setup-python from 6 to 7 ([1fb87cf](https://github.com/bauer-group/CS-BackupHelper/commit/1fb87cf2eb23593a2ffaf52baeed8cd00bb4f8fb))
+* **deps:** bump mariadb from 11 to 13 ([12dfefd](https://github.com/bauer-group/CS-BackupHelper/commit/12dfefdad28f36207ab9ce7832b00819bc7d525e))
+* **deps:** bump mysql from 8.0 to 26.7 ([2cdf28a](https://github.com/bauer-group/CS-BackupHelper/commit/2cdf28a9c78298a6ed5c4dd7c85032ff934eb7b3))
+
 ## [1.10.0](https://github.com/bauer-group/CS-BackupHelper/compare/v1.9.0...v1.10.0) (2026-10-09)
 
 ### 🚀 Features
