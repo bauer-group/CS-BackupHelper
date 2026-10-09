@@ -15,9 +15,11 @@ def _run_checked(argv: list[str], run) -> None:
 
     The tool name (argv[0]) and stderr are surfaced for diagnostics; the
     recipient and other argv items are intentionally not repeated in the
-    message to avoid leaking key identities into higher log levels.
+    message to avoid leaking key identities into higher log levels. The
+    output is captured for that: without it ``stderr`` is None and the tool's
+    reason never reaches the log, the alert or the job errors.
     """
-    proc = run(argv)
+    proc = run(argv, capture_output=True)
     if proc.returncode != 0:
         stderr = proc.stderr
         if isinstance(stderr, bytes):

@@ -1,5 +1,7 @@
 """Tests for optional client-side encryption-at-rest via age/gpg subprocess."""
 
+import subprocess
+import sys
 from subprocess import CompletedProcess
 
 import pytest
@@ -106,6 +108,38 @@ def test_nonzero_returncode_raises_with_stderr(tmp_path):
         encrypt(src, out, mode="age", recipient="age1abc", run=fake)
 
     assert "age: no such recipient" in str(excinfo.value)
+
+
+def _failing_tool(message: str):
+    """A ``run`` that executes a real process which writes ``message`` to its
+    stderr and exits 1 - with whatever subprocess options the engine passes,
+    unlike FakeRun, which hands out stderr even when nothing captured it."""
+
+    def run(argv, **kwargs):
+        script = f"import sys; sys.stderr.write({message!r}); sys.exit(1)"
+        return subprocess.run([sys.executable, "-c", script], **kwargs)
+
+    return run
+
+
+def test_the_tools_error_output_reaches_the_encryption_error(tmp_path):
+    # Regression: the tool ran without capture_output, so stderr was None and
+    # every failure read "gpg exited with 2: None" in the log, the alert and
+    # the job errors (seen in the e2e encryption suite); the real reason only
+    # went to the container's stderr.
+    src = tmp_path / "archive.tar"
+    src.write_bytes(b"data")
+    with pytest.raises(EncryptionError, match="age exited with 1: age: error: unknown recipient"):
+        encrypt(src, tmp_path / "archive.tar.age", mode="age", recipient="age1abc",
+                run=_failing_tool("age: error: unknown recipient"))
+
+
+def test_the_tools_error_output_reaches_the_decryption_error(tmp_path):
+    src = tmp_path / "archive.tar.gpg"
+    src.write_bytes(b"data")
+    with pytest.raises(EncryptionError, match="gpg exited with 1: gpg: decryption failed: No secret key"):
+        decrypt(src, tmp_path / "archive.tar", mode="gpg",
+                run=_failing_tool("gpg: decryption failed: No secret key"))
 
 
 def test_age_decrypt_builds_expected_argv_and_returns_out(tmp_path):
