@@ -23,7 +23,9 @@ scheduled run of the job, indefinitely.
 Every value interpolated into the HTML part is escaped: error texts carry run
 data (file names, database and exception messages) that must reach the
 recipient as text and never be interpreted as markup by the mail client. The
-plain-text part needs no escaping and carries the same values verbatim.
+plain-text part needs no escaping and carries the same values verbatim. Both
+parts show the same run figures (duration, size); the HTML part keeps the line
+breaks of a multi-line error text (``white-space: pre-wrap``).
 """
 
 from __future__ import annotations
@@ -53,6 +55,17 @@ SMTP_TIMEOUT_SECONDS = 60
 def _esc(value: object) -> str:
     """``value`` as HTML text, safe in element content and quoted attributes."""
     return html.escape(str(value), quote=True)
+
+
+def _run_figures(event: AlertEvent) -> list[tuple[str, str]]:
+    """Duration and size of the run, each only when the event carries it -
+    one source for both message parts, so they always show the same."""
+    figures: list[tuple[str, str]] = []
+    if event.duration_seconds:
+        figures.append(("Duration", f"{event.duration_seconds:.1f}s"))
+    if event.total_bytes:
+        figures.append(("Size", f"{event.total_bytes} bytes"))
+    return figures
 
 
 class EmailChannel(Channel):
@@ -115,10 +128,7 @@ class EmailChannel(Channel):
         lines = [format_summary(event), ""]
         if event.job:
             lines.append(f"Job: {event.job}")
-        if event.duration_seconds:
-            lines.append(f"Duration: {event.duration_seconds:.1f}s")
-        if event.total_bytes:
-            lines.append(f"Size: {event.total_bytes} bytes")
+        lines.extend(f"{label}: {value}" for label, value in _run_figures(event))
         if event.errors:
             lines.append("")
             lines.append("Errors:")
@@ -128,8 +138,16 @@ class EmailChannel(Channel):
     def _html_body(self, event: AlertEvent) -> str:
         errors_html = ""
         if event.errors:
-            items = "".join(f"<li>{_esc(e)}</li>" for e in event.errors)
+            # pre-wrap keeps the line breaks and indentation of a multi-line
+            # error (a pg_dump stderr, a traceback) and still wraps long lines.
+            items = "".join(
+                f'<li style="white-space:pre-wrap">{_esc(e)}</li>' for e in event.errors
+            )
             errors_html = f"<h3>Errors</h3><ul>{items}</ul>"
+        figures = "".join(
+            f"<br><strong>{label}:</strong> {_esc(value)}"
+            for label, value in _run_figures(event)
+        )
         return (
             f"<html><body>"
             f"<h2>{_esc(event.title)}</h2>"
@@ -137,7 +155,7 @@ class EmailChannel(Channel):
             f"<p><strong>Instance:</strong> {_esc(event.instance)}<br>"
             f"<strong>Job:</strong> {_esc(event.job)}<br>"
             f"<strong>Snapshot:</strong> {_esc(event.snapshot_id)}<br>"
-            f"<strong>Status:</strong> {_esc(event.status)}</p>"
+            f"<strong>Status:</strong> {_esc(event.status)}{figures}</p>"
             f"{errors_html}"
             f"</body></html>"
         )

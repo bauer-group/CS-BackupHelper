@@ -270,12 +270,17 @@ class _HtmlProbe(HTMLParser):
     def __init__(self, html: str):
         super().__init__(convert_charrefs=True)
         self.tags: list[str] = []
+        self.attrs: list[dict] = []  # per start tag, in document order
         self._text: list[str] = []
         self.feed(html)
         self.close()
 
     def handle_starttag(self, tag, attrs):
         self.tags.append(tag)
+        self.attrs.append(dict(attrs))
+
+    def styles_of(self, tag: str) -> list[str]:
+        return [a.get("style") or "" for t, a in zip(self.tags, self.attrs) if t == tag]
 
     def handle_data(self, data):
         self._text.append(data)
@@ -329,6 +334,46 @@ def test_email_html_escapes_every_interpolated_field(field):
     assert "script" not in probe.tags
     assert "img" not in probe.tags
     assert MARKUP in probe.text
+
+
+# ------------------------------------------- HTML matches the text part ---
+
+
+def test_email_html_shows_duration_and_size_like_the_text_part():
+    event = replace(_event(), job="main", duration_seconds=83.27, total_bytes=1048576)
+
+    html_text = _HtmlProbe(_html_part(event)).text
+    text = _text_part(event)
+
+    for line in ("Duration: 83.3s", "Size: 1048576 bytes"):
+        assert line in text
+        assert line in html_text
+
+
+def test_email_leaves_out_duration_and_size_the_event_does_not_carry():
+    event = replace(_event(), duration_seconds=0.0, total_bytes=0)
+
+    html_text = _HtmlProbe(_html_part(event)).text
+    text = _text_part(event)
+
+    for label in ("Duration", "Size"):
+        assert label not in text
+        assert label not in html_text
+
+
+def test_email_html_keeps_the_line_breaks_of_multi_line_errors():
+    multi_line = (
+        "db: pg_dump exited 1\n"
+        "pg_dump: error: query failed: ERROR:  permission denied for table x\n"
+        "    detail: <none> & more"
+    )
+    event = replace(_event(), errors=[multi_line, "files: ok"])
+
+    probe = _HtmlProbe(_html_part(event))
+
+    assert probe.styles_of("li") == ["white-space:pre-wrap"] * 2
+    assert multi_line in probe.text  # newlines and indentation reach the client
+    assert "&lt;none&gt; &amp; more" in _html_part(event)  # still escaped
 
 
 def test_email_text_part_keeps_error_texts_verbatim():
