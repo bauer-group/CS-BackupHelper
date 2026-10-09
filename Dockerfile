@@ -33,7 +33,7 @@ RUN pip install --no-cache-dir --prefix=/install .
 FROM python:3.14-alpine AS test
 ARG PG_CLIENT_VERSION
 RUN apk add --no-cache build-base libffi-dev \
-        "postgresql${PG_CLIENT_VERSION}-client" mariadb-client
+        "postgresql${PG_CLIENT_VERSION}-client" mariadb-client mariadb-connector-c
 WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src/ ./src/
@@ -61,10 +61,14 @@ LABEL org.opencontainers.image.source="https://github.com/bauer-group/CS-BackupH
 LABEL org.opencontainers.image.base.name="docker.io/library/python:3.14-alpine"
 LABEL org.opencontainers.image.version="${IMAGE_VERSION}"
 
-# Runtime deps: DB clients (mariadb-client covers MariaDB 11/12 + MySQL 8/9),
+# Runtime deps: DB clients (mariadb-client covers MariaDB and MySQL),
 # encryption tools (gnupg + age), tini, tzdata, ca-certificates, procps (pgrep).
+# mariadb-connector-c carries the client authentication plugins that Alpine
+# strips from mariadb-client (caching_sha2_password - MySQL's default since
+# 8.0 -, sha256_password, client_ed25519, parsec, dialog): without it the
+# client cannot log in to a default MySQL 8.4+ or to an ed25519/PARSEC user.
 RUN apk add --no-cache \
-        "postgresql${PG_CLIENT_VERSION}-client" mariadb-client \
+        "postgresql${PG_CLIENT_VERSION}-client" mariadb-client mariadb-connector-c \
         gnupg age tini tzdata ca-certificates procps \
     && addgroup -g 1000 backup \
     && adduser -u 1000 -G backup -h /app -D backup

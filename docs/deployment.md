@@ -195,8 +195,9 @@ The runtime is deliberately minimal and unprivileged:
 - **`tini` as PID 1** — `ENTRYPOINT ["/sbin/tini", "--", "backuphelper"]` reaps
   zombies and forwards signals for clean shutdown of the scheduler.
 - **Small base** — `python:3.14-alpine` with only the needed runtime packages:
-  `postgresql<major>-client`, `mariadb-client`, `gnupg`, `age`, `tini`, `tzdata`,
-  `ca-certificates`, `procps`.
+  `postgresql<major>-client`, `mariadb-client` + `mariadb-connector-c` (its
+  authentication plugins), `gnupg`, `age`, `tini`, `tzdata`, `ca-certificates`,
+  `procps`.
 - **Test-gated build** — the production stage cannot be assembled unless the
   `pytest` stage passes (`COPY --from=test` creates a hard dependency on the test
   stage). A red test suite means no image.
