@@ -38,7 +38,7 @@ services:
     networks: [e2e]
 
   mariadb:
-    image: mariadb:11
+    image: mariadb:13
     container_name: bh-e2e_MARIADB
     hostname: mariadb
     <<: *logging
