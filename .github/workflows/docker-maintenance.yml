@@ -1,10 +1,18 @@
 # =============================================================================
-# Docker Maintenance — Auto-merge Dependabot PRs (base image)
+# Docker Maintenance — Auto-merge Dependabot PRs (every ecosystem)
 # =============================================================================
-# When Dependabot opens a PR bumping the base image in ./Dockerfile
-# (python:3.14-alpine), this workflow auto-approves and merges it after
-# validation passes, which then triggers docker-release.yml to build and push
-# the updated image.
+# Every Dependabot PR reaches this workflow (no paths: filter), so each one
+# gets an explicit decision and annotation instead of silently staying open.
+# A PR is merged only after the pull_request run of docker-release.yml passed
+# on its head commit - pytest, the e2e backup round trips and the image build:
+#
+#   docker          Dockerfile              the image is built from it
+#   pip             pyproject.toml          pytest, image build (pytest gate)
+#   docker-compose  docker-compose.e2e.yml  the round trips start its servers
+#   github-actions  .github/workflows/**    never merged: a CI change
+#
+# A PR whose files do not start docker-release.yml stays open as "not
+# tested". The merge is made with GITHUB_TOKEN and starts no push workflow.
 # =============================================================================
 
 name: 🔧 Docker Maintenance
@@ -12,8 +20,6 @@ name: 🔧 Docker Maintenance
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - 'Dockerfile'
 
 permissions:
   contents: write
