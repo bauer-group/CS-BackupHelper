@@ -66,7 +66,8 @@ CATALOG_TIMEOUT = 300  # seconds, for the catalog query and the dump's TOC
 #   beside an overload ("is not unique"); not an extension's, not one PostgreSQL
 #   made for a type (a range type's constructors);
 # * the cluster's roles ("R", the role as name): the owners `pg_restore --list`
-#   prints after each entry, whose names may hold spaces.
+#   prints after each entry, whose names may hold spaces;
+# * the server's version ("V", server_version_num as name).
 # Quoting is PostgreSQL's own, for the DROP. The first branch's names are text:
 # as type name (pg_class.relname) the whole column would be cut to 63 bytes, and
 # with it a routine's "name(argument types)".
@@ -123,6 +124,8 @@ LIVE_OBJECTS_SQL = (
     "AND d.deptype IN ('e', 'i')) "
     "UNION ALL "
     "SELECT 'R', '', rolname, '', '', '' FROM pg_catalog.pg_roles "
+    "UNION ALL "
+    "SELECT 'V', '', pg_catalog.current_setting('server_version_num'), '', '', '' "
     "ORDER BY 1, 2, 3, 4"
 )
 
@@ -149,9 +152,14 @@ _OTHER_KINDS = ("AG", "FN", "PR", "D", "T")
 # is the last field, possibly with spaces.
 _TOC_ENTRY = re.compile(r"^\d+;\s+(?:1247|1255|1259|2606|2615)\s+\d+\s+(.*)$")
 
+# pg_restore writes this into every script (pg_dump 17 and later), whatever
+# the server: PostgreSQL 16 and older reject it.
+_TRANSACTION_TIMEOUT = b"SET transaction_timeout = 0;\n"
+
+
 class LiveObject(NamedTuple):
     # pg_class.relkind, "F" foreign key, "T" type, "D" domain, "FN" function,
-    # "PR" procedure, "AG" aggregate, "R" role
+    # "PR" procedure, "AG" aggregate, "R" role, "V" server version
     kind: str
     schema: str
     name: str  # the object, the foreign key's table, or "routine(argument types)"
@@ -180,6 +188,7 @@ class Replacement(NamedTuple):
     recreated: list[str]  # those the dump creates: dropped whole
     partitioned: list[LiveObject]  # partitioned tables the dump recreates
     absent: list[LiveObject]  # objects of those schemas the dump does not contain
+    server_version: int = 0  # server_version_num of the target
 
 
 class PostgresConfig(ConfigModel):
@@ -298,12 +307,15 @@ def build_restore_argv(cfg: PostgresConfig, dump: Path) -> list[str]:
     if suffix.endswith(".dump"):
         return ["pg_restore", *_clean_restore_flags(cfg),
                 "--single-transaction", "--dbname", cfg.database, str(dump)]
-    # ON_ERROR_STOP=1 makes psql exit non-zero on the first failed statement
-    # instead of swallowing errors and exiting 0 — so a plain-SQL restore onto a
-    # non-empty DB fails loudly instead of reporting a false success.
     if suffix.endswith(".sql.gz"):
-        return ["psql", "--quiet", "--set", "ON_ERROR_STOP=1"]  # dump streamed to stdin (gunzipped)
-    return ["psql", "--quiet", "--set", "ON_ERROR_STOP=1", "--file", str(dump)]
+        return list(_PSQL_STDIN)  # dump streamed to stdin (gunzipped)
+    return [*_PSQL_STDIN, "--file", str(dump)]
+
+
+# ON_ERROR_STOP=1 makes psql exit non-zero on the first failed statement
+# instead of swallowing errors and exiting 0 — so a plain-SQL restore onto a
+# non-empty DB fails loudly instead of reporting a false success.
+_PSQL_STDIN = ["psql", "--quiet", "--set", "ON_ERROR_STOP=1"]
 
 
 def _pg_restore(cfg: PostgresConfig, dump: Path, run: RunFn) -> None:
@@ -314,22 +326,47 @@ def _pg_restore(cfg: PostgresConfig, dump: Path, run: RunFn) -> None:
             _restore_replacing(cfg, dump, plan, env, run)
             return
     argv = build_restore_argv(cfg, dump)
-    if "".join(dump.suffixes).endswith(".sql.gz"):
-        # gunzip to a real temp file: a subprocess reads the child's stdin fd
-        # directly, so a gzip file object would feed it the *compressed* bytes.
-        with tempfile.NamedTemporaryFile(suffix=".sql", delete=False) as tmp:
-            tmp_name = tmp.name
-            with gzip.open(dump, "rb") as gz:
-                shutil.copyfileobj(gz, tmp)
-        try:
-            with open(tmp_name, "rb") as fh:
-                result = run(argv, env=env, stdin=fh, capture_output=True, timeout=RESTORE_TIMEOUT)
-        finally:
-            os.unlink(tmp_name)
-    else:
+    if argv[0] == "pg_restore":
         result = run(argv, env=env, capture_output=True, timeout=RESTORE_TIMEOUT)
+    else:
+        result = _restore_plain(cfg, dump, env, run)
     if result.returncode != 0:
         raise SourceError(f"postgres restore failed: {_text(result.stderr)}")
+
+
+def _restore_plain(cfg: PostgresConfig, dump: Path, env: dict[str, str],
+                   run: RunFn) -> subprocess.CompletedProcess:
+    """A plain-format dump through psql. pg_dump 17 and later writes ``SET
+    transaction_timeout`` into its header, which PostgreSQL 16 and older reject:
+    there the dump goes through a copy with that line commented out."""
+    old_server = 0 < _server_version(env, run) < 170000
+    if not dump.name.endswith(".gz") and not old_server:
+        return run(build_restore_argv(cfg, dump), env=env, capture_output=True,
+                   timeout=RESTORE_TIMEOUT)
+    # gunzip (or copy) to a real temp file: a subprocess reads the child's stdin
+    # fd directly, so a gzip file object would feed it the *compressed* bytes.
+    with tempfile.NamedTemporaryFile(suffix=".sql", delete=False) as tmp:
+        tmp_name = tmp.name
+        with (gzip.open if dump.name.endswith(".gz") else open)(dump, "rb") as src:
+            shutil.copyfileobj(src, tmp)
+    try:
+        if old_server:
+            _comment_out_header_line(Path(tmp_name), _TRANSACTION_TIMEOUT)
+        with open(tmp_name, "rb") as fh:
+            return run(list(_PSQL_STDIN), env=env, stdin=fh, capture_output=True,
+                       timeout=RESTORE_TIMEOUT)
+    finally:
+        os.unlink(tmp_name)
+
+
+def _server_version(env: dict[str, str], run: RunFn) -> int:
+    """server_version_num of the target; 0 when psql cannot tell (the restore
+    then reports why)."""
+    result = run(["psql", "--no-psqlrc", "--quiet", "--tuples-only", "--no-align",
+                  "--command", "SHOW server_version_num"],
+                 env=env, capture_output=True, timeout=CATALOG_TIMEOUT)
+    version = _text(result.stdout)
+    return int(version) if result.returncode == 0 and version.isdigit() else 0
 
 
 def plan_replacement(dump: Path, env: dict[str, str], run: RunFn) -> Optional[Replacement]:
@@ -338,7 +375,9 @@ def plan_replacement(dump: Path, env: dict[str, str], run: RunFn) -> Optional[Re
     None — the plain ``pg_restore`` path — when the target is empty (a fresh
     database), or holds neither a partitioned table the dump recreates nor, in
     the snapshot's schemas, an object the dump does not contain (the snapshot's
-    own schema, its data changed since).
+    own schema, its data changed since). On PostgreSQL 16 and older a plan that
+    drops nothing instead: pg_restore 17 and later sets transaction_timeout on
+    its connection, which those servers reject; only its script can do without.
     """
     live = run(
         ["psql", "--no-psqlrc", "--quiet", "--tuples-only", "--no-align",
@@ -351,9 +390,16 @@ def plan_replacement(dump: Path, env: dict[str, str], run: RunFn) -> Optional[Re
                           f"of the target database: {_text(live.stderr)}")
     rows = [LiveObject(*row) for row in _nul_rows(live.stdout, columns=6)]
     owners = [o.name for o in rows if o.kind == "R"]
-    objects = [o for o in rows if o.kind != "R"]
-    if not objects:
+    version = next((int(o.name) for o in rows if o.kind == "V" and o.name.isdigit()), 0)
+    objects = [o for o in rows if o.kind not in ("R", "V")]
+
+    def plain() -> Optional[Replacement]:
+        if 0 < version < 170000:
+            return Replacement([], [], [], [], [], [], server_version=version)
         return None
+
+    if not objects:
+        return plain()
     listing = run(["pg_restore", "--list", str(dump)],
                   env=env, capture_output=True, timeout=CATALOG_TIMEOUT)
     if listing.returncode != 0:
@@ -378,7 +424,7 @@ def plan_replacement(dump: Path, env: dict[str, str], run: RunFn) -> Optional[Re
               and (o.schema in schemas or o.ref_schema in schemas
                    or (o.kind in _OTHER_KINDS and o.schema in recreated))]
     if not partitioned and not absent:
-        return None
+        return plain()
     replaced = [o for o in relations if o.schema in schemas]
     if replaced and not any(o.key() in keys for o in replaced):
         # Nothing in common: another application's database, not the one the
@@ -396,7 +442,7 @@ def plan_replacement(dump: Path, env: dict[str, str], run: RunFn) -> Optional[Re
                     key=lambda o: order.index(o.kind) if o.kind in order else -1)
     return Replacement(relations=replaced, others=[o for o in absent if o.kind in _OTHER_KINDS],
                        schemas=schemas, recreated=recreated, partitioned=partitioned,
-                       absent=absent)
+                       absent=absent, server_version=version)
 
 
 def partitioned_tables_to_replace(dump: Path, env: dict[str, str], run: RunFn) -> list[str]:
@@ -476,9 +522,15 @@ def _restore_replacing(cfg: PostgresConfig, dump: Path, plan: Replacement,
                        env=env, capture_output=True, timeout=RESTORE_TIMEOUT)
         if generate.returncode != 0:
             raise SourceError(f"postgres restore failed: {_text(generate.stderr)}")
-        log.info("restoring %s by replacing the %d relation(s) of schema(s) %s "
-                 "in one transaction", dump.name, len(plan.relations),
-                 _shown(", ".join(sorted({*plan.schemas, *plan.recreated}))))
+        if 0 < plan.server_version < 170000:
+            _comment_out_header_line(script, _TRANSACTION_TIMEOUT)
+        if plan.relations or plan.others or plan.recreated:
+            log.info("restoring %s by replacing the %d relation(s) of schema(s) %s "
+                     "in one transaction", dump.name, len(plan.relations),
+                     _shown(", ".join(sorted({*plan.schemas, *plan.recreated}))))
+        else:
+            log.info("restoring %s through its SQL script: PostgreSQL %d rejects the "
+                     "transaction_timeout pg_restore sets", dump.name, plan.server_version // 10000)
         if plan.partitioned:
             log.info("partitioned table(s) the dump recreates: %s",
                      _shown(", ".join(o.label() for o in plan.partitioned)))
@@ -499,6 +551,19 @@ def _restore_replacing(cfg: PostgresConfig, dump: Path, plan: Replacement,
         if plan.absent:
             log.info("not in the snapshot, dropped: %s",
                      _shown(", ".join(o.label() for o in plan.absent)))
+
+
+def _comment_out_header_line(script: Path, line: bytes) -> None:
+    """Turn ``line`` of the script's header - the SETs before its first object -
+    into a comment of the same length, in place: the script may be gigabytes."""
+    with open(script, "r+b") as fh:
+        head = fh.read(64 * 1024)
+        at = head.find(b"\n" + line)
+        first_object = head.find(b"\n--\n-- Name: ")
+        if at < 0 or (0 <= first_object < at):
+            return
+        fh.seek(at + 1)
+        fh.write(b"-- " + line[3:])  # "SET …" -> "-- …", same length
 
 
 def _nul_rows(data: bytes | str | None, columns: int) -> list[tuple[str, ...]]:

@@ -340,6 +340,24 @@ if [ "$st" = "snapshot" ] && printf '%s' "$out" | grep -q "restore complete" \
   ok "postgres restore beside an extension's relations stays the plain pg_restore"
 else ko "postgres restore beside an extension's relations: got '$st'" "$out"; fi
 
+# (g) a plain-format snapshot (.sql.gz, replayed by psql) into an emptied
+# database - on PostgreSQL 16 and older without the transaction_timeout that
+# pg_dump 18 writes into its header.
+out=$(psql_app <<'SQL'
+DROP DATABASE IF EXISTS app_plain;
+CREATE DATABASE app_plain;
+SQL
+)
+out+=$(psql_in app_plain -c "CREATE TABLE note(id int PRIMARY KEY, body text);
+                             INSERT INTO note VALUES (1, 'snapshot');")
+pg_plain='{"instance_name":"e2e","jobs":[{"name":"pgplain","sources":[{"type":"postgres","host":"postgres","database":"app_plain","user":"app","password":"devpassword","dump_format":"plain"}],"destinations":[{"type":"local"}]}]}'
+out+=$(backup_now "$pg_plain"); sid=$(printf "%s" "$out" | sid_of)
+psql_in app_plain -c "DROP TABLE note;" >/dev/null
+out+=$(do_restore "$pg_plain" "$sid" app_plain); st=$(psql_in app_plain -c "SELECT body FROM note")
+if [ "$st" = "snapshot" ] && printf '%s' "$out" | grep -q "restore complete"; then
+  ok "postgres plain-format restore into an emptied database"
+else ko "postgres plain-format restore: got '$st'" "$out"; fi
+
 # ── MariaDB ──────────────────────────────────────────────────────────────────
 echo "== engine: mariadb =="
 $COMPOSE exec -T mariadb mariadb -uroot -prootpw app -e \

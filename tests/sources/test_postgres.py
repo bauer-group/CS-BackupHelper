@@ -13,6 +13,7 @@ from backuphelper.sources.postgres import (
     LiveObject,
     PostgresSource,
     Replacement,
+    _comment_out_header_line,
     build_dump_argv,
     build_env,
     build_restore_argv,
@@ -241,17 +242,21 @@ class _PgRun:
     """Answers each command of a postgres restore; records argv, env and the SQL psql applies."""
 
     def __init__(self, live="", live_rc=0, list_rc=0, generate_rc=0, apply_rc=0,
-                 apply_stderr="", toc=None):
+                 apply_stderr="", toc=None, version=""):
         self.live, self.live_rc, self.list_rc = live, live_rc, list_rc
         self.toc = TOC.encode() if toc is None else toc
         self.generate_rc, self.apply_rc, self.apply_stderr = generate_rc, apply_rc, apply_stderr
+        self.version = version  # what "SHOW server_version_num" answers
         self.calls: list[list[str]] = []
         self.envs: list[dict] = []
         self.applied_sql: list[str] = []
+        self.stdin: list[bytes] = []  # what a plain restore fed psql
 
     def __call__(self, argv, **kw):
         self.calls.append(argv)
         self.envs.append(kw.get("env") or {})
+        if "SHOW server_version_num" in argv:
+            return self._done(argv, 0, f"{self.version}\n".encode(), "")
         if argv[0] == "psql" and "--command" in argv:
             live = self.live.encode("utf-8", "surrogateescape")
             return self._done(argv, self.live_rc, live, "psql: connection refused")
@@ -266,6 +271,8 @@ class _PgRun:
                 Path(f).read_text(encoding="utf-8", errors="surrogateescape") for f in files))
             stderr = self.apply_stderr if self.apply_rc == 0 else "ERROR:  something failed"
             return subprocess.CompletedProcess(argv, self.apply_rc, b"", stderr.encode())
+        if kw.get("stdin") is not None:
+            self.stdin.append(kw["stdin"].read())
         return self._done(argv, 0, b"", "")  # plain pg_restore / psql
 
     @staticmethod
@@ -331,7 +338,7 @@ def test_the_catalog_query_leaves_out_what_a_restore_must_not_drop():
         assert clause in LIVE_OBJECTS_SQL, clause
     # pg_dump's form: input argument types, "(*)" for an aggregate without any
     for clause in ("unnest(p.proargtypes)", "format_type(a.t, NULL)", "THEN '*'",
-                   "regprocedure"):
+                   "regprocedure", "current_setting('server_version_num')"):
         assert clause in LIVE_OBJECTS_SQL, clause
 
 
@@ -534,6 +541,47 @@ def test_a_routine_the_snapshot_does_not_contain_is_enough(tmp_path):
     assert [o.label() for o in plan.others] == ["function public.touch2()"]
 
 
+def test_on_postgresql_16_and_older_the_script_does_not_set_transaction_timeout(tmp_path):
+    # pg_restore 18 writes it into every script; PostgreSQL 16 rejects it.
+    run = _PgRun(live=LIVE_MIGRATED + _live(("V", "", "160004", "", "", "")))
+    PostgresSource(_cfg(), run=run).restore(_staged_dump(tmp_path))
+    script = run.applied_sql[0].split("SET client_min_messages = error;\n")[1]
+    assert "\nSET transaction_timeout" not in script
+    assert script == SCRIPT.replace("SET transaction_timeout", "--  transaction_timeout")
+
+
+@pytest.mark.parametrize("live", [LIVE_SAME, ""], ids=["same schema", "empty"])
+def test_on_postgresql_16_and_older_every_restore_goes_through_the_script(tmp_path, caplog, live):
+    # pg_restore sets transaction_timeout on its own connection too: there is no
+    # plain path. Nothing differs, so nothing is dropped.
+    run = _PgRun(live=live + _live(("V", "", "160004", "", "", "")))
+    with caplog.at_level(logging.INFO, logger="backuphelper.sources.postgres"):
+        PostgresSource(_cfg(), run=run).restore(_staged_dump(tmp_path))
+    prelude, script = run.applied_sql[0].split("SET client_min_messages = error;\n")
+    assert "DROP" not in prelude
+    assert "\nSET transaction_timeout" not in script
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("through its SQL script: PostgreSQL 16 rejects" in m for m in messages)
+    assert not any("by replacing" in m or "dropped" in m for m in messages)
+
+
+@pytest.mark.parametrize("version", ["180001", "170000", ""])
+def test_from_postgresql_17_on_the_script_is_left_as_it_is(tmp_path, version):
+    rows = _live(("V", "", version, "", "", "")) if version else ""
+    run = _PgRun(live=LIVE_MIGRATED + rows)
+    PostgresSource(_cfg(), run=run).restore(_staged_dump(tmp_path))
+    assert run.applied_sql[0].split("SET client_min_messages = error;\n")[1] == SCRIPT
+
+
+def test_only_the_header_of_the_script_is_changed(tmp_path):
+    # The same line in a function body further down is the function's.
+    script = tmp_path / "restore.sql"
+    body = "--\n-- Name: f; Type: FUNCTION\n--\n\nSET transaction_timeout = 0;\n"
+    script.write_bytes(b"BEGIN;\n" + body.encode())
+    _comment_out_header_line(script, b"SET transaction_timeout = 0;\n")
+    assert script.read_bytes() == b"BEGIN;\n" + body.encode()
+
+
 def test_types_outside_the_snapshots_schemas_are_never_dropped(tmp_path):
     # Dropping reporting.grade would take reporting's columns of it along.
     plan = _plan(tmp_path, LIVE_MIGRATED + _live(_o("T", "reporting", "grade"),
@@ -726,7 +774,33 @@ def test_keep_acl_accepts_an_interpolated_string():
 
 def test_plain_dumps_skip_the_catalog_query(tmp_path):
     (tmp_path / "logto.sql.gz").write_bytes(gzip.compress(b"SELECT 1;"))
-    run = _PgRun(live=LIVE_MIGRATED)
+    run = _PgRun(live=LIVE_MIGRATED, version="180001")
     PostgresSource(_cfg(dump_format="plain"), run=run).restore(tmp_path)
-    assert all("--command" not in c for c in run.calls)
-    assert len(run.calls) == 1 and run.calls[0][0] == "psql"
+    # Only the server's version, then psql with the dump.
+    assert all(LIVE_OBJECTS_SQL not in c for c in run.calls)
+    assert run.calls[0][-2:] == ["--command", "SHOW server_version_num"]
+    assert run.calls[-1] == ["psql", "--quiet", "--set", "ON_ERROR_STOP=1"]
+    assert run.stdin == [b"SELECT 1;"]
+
+
+PLAIN_SCRIPT = (b"--\n-- PostgreSQL database dump\n--\n\nSET statement_timeout = 0;\n"
+                b"SET transaction_timeout = 0;\n\n--\n-- Name: t; Type: TABLE\n--\n\n"
+                b"CREATE TABLE public.t (id integer);\n")
+
+
+@pytest.mark.parametrize("name", ["logto.sql.gz", "logto.sql"])
+def test_plain_dumps_reach_postgresql_16_without_transaction_timeout(tmp_path, name):
+    # pg_dump 18 writes it into the header; PostgreSQL 16 rejects it.
+    data = gzip.compress(PLAIN_SCRIPT) if name.endswith(".gz") else PLAIN_SCRIPT
+    (tmp_path / name).write_bytes(data)
+    run = _PgRun(version="160004")
+    PostgresSource(_cfg(dump_format="plain"), run=run).restore(tmp_path)
+    assert run.stdin == [PLAIN_SCRIPT.replace(b"SET transaction_timeout", b"--  transaction_timeout")]
+    assert sorted(p.name for p in tmp_path.iterdir()) == [name]  # the copy is gone
+
+
+def test_an_uncompressed_plain_dump_on_postgresql_17_is_read_where_it_is(tmp_path):
+    (tmp_path / "logto.sql").write_bytes(PLAIN_SCRIPT)
+    run = _PgRun(version="170004")
+    PostgresSource(_cfg(dump_format="plain"), run=run).restore(tmp_path)
+    assert run.calls[-1][-2:] == ["--file", str(tmp_path / "logto.sql")]
