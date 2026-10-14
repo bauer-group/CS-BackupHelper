@@ -180,6 +180,9 @@ TOC = """\
 7; 2615 2200 SCHEMA - public pg_database_owner
 230; 1247 16400 TYPE public mood app
 231; 1247 16401 DOMAIN public posint app
+232; 1255 16402 FUNCTION public touch() app
+233; 1255 16403 PROCEDURE public tidy(integer, text) app
+234; 1255 16404 AGGREGATE public total(integer) app
 240; 1259 16500 TABLE cache objects app
 241; 1259 16510 TABLE cache objects_p1 app
 242; 1259 16520 TABLE public my events app
@@ -194,6 +197,13 @@ TOC = """\
 3802; 1259 16610 INDEX public plain_name_idx app
 3803; 2606 16620 FK CONSTRAINT public plain plain_ref_fkey app
 """
+
+
+# The head of a script pg_restore 18 generates, and its first object.
+SCRIPT = ("--\n-- PostgreSQL database dump\n--\n\nBEGIN;\n\nSET statement_timeout = 0;\n"
+          "SET transaction_timeout = 0;\nSET client_min_messages = warning;\n\n"
+          "--\n-- Name: plain; Type: TABLE; Schema: public; Owner: -\n--\n\n"
+          "CREATE TABLE public.plain (id integer);\n")
 
 
 def _o(kind, schema, name, quoted=None, constraint="", ref=""):
@@ -211,6 +221,9 @@ PLAIN = _o("r", "public", "plain")
 LIVE_SAME = _live(PLAIN, _o("S", "public", "counter"), _o("v", "public", "objects_view"),
                   _o("v", "public", "workflow history", 'public."workflow history"'),
                   _o("T", "public", "mood"), _o("D", "public", "posint"),
+                  _o("FN", "public", "touch()", "public.touch()"),
+                  _o("PR", "public", "tidy(integer, text)", "public.tidy(integer,text)"),
+                  _o("AG", "public", "total(integer)", "public.total(integer)"),
                   _o("F", "public", "plain", constraint="plain_ref_fkey", ref="public"))
 # Partitioned tables the dump recreates - and nothing it does not contain.
 LIVE_PARTITIONED = _live(_o("p", "cache", "objects"),
@@ -245,7 +258,7 @@ class _PgRun:
         if argv[:2] == ["pg_restore", "--list"]:
             return self._done(argv, self.list_rc, self.toc, "pg_restore: not a valid archive")
         if argv[0] == "pg_restore" and "--file" in argv:
-            Path(argv[argv.index("--file") + 1]).write_text("-- dump script\n", encoding="utf-8")
+            Path(argv[argv.index("--file") + 1]).write_text(SCRIPT, encoding="utf-8", newline="\n")
             return self._done(argv, self.generate_rc, b"", "pg_restore: corrupt archive")
         if _is_apply(argv):
             files = [argv[i + 1] for i, a in enumerate(argv) if a == "--file"]
@@ -289,6 +302,8 @@ def test_dump_keys_list_schemas_types_relations_and_constraints_without_owner():
         "TABLE public plain", "SEQUENCE public counter", "VIEW public workflow history",
         "VIEW public objects_view", "CONSTRAINT cache objects objects_pkey",
         "INDEX public plain_name_idx", "FK CONSTRAINT public plain plain_ref_fkey",
+        "FUNCTION public touch()", "PROCEDURE public tidy(integer, text)",
+        "AGGREGATE public total(integer)",
     }
 
 
@@ -296,19 +311,27 @@ def test_the_catalog_query_reads_nul_separated_rows(tmp_path):
     run = _PgRun(live=LIVE_SAME)
     plan_replacement(_staged_dump(tmp_path) / "logto.dump", {}, run)
     query = run.calls[0]
-    assert query[query.index("--command") + 1] == LIVE_OBJECTS_SQL
+    # search_path '' first: the argument types as pg_dump lists them
+    commands = [query[i + 1] for i, a in enumerate(query) if a == "--command"]
+    assert commands == ["SET search_path = ''", LIVE_OBJECTS_SQL]
     assert "--field-separator-zero" in query and "--record-separator-zero" in query
 
 
 def test_the_catalog_query_leaves_out_what_a_restore_must_not_drop():
     # Partitions (their parent takes them along), extension members - relations,
-    # the keys between them and types -, a column's own sequence, objects of
-    # another owner, a partition's copy of a key, a table's row type.
+    # the keys between them, types and routines -, a column's own sequence,
+    # objects of another owner, a partition's copy of a key, a table's row type,
+    # the routines PostgreSQL makes for a type (a range type's constructors).
     for clause in ("NOT c.relispartition", "d.deptype = 'e' OR", "d.deptype IN ('a', 'i')",
                    "pg_has_role(c.relowner, 'USAGE')", "con.conparentid = 0",
                    "d.objid = c.oid AND d.deptype = 'e'", "pg_has_role(t.typowner, 'USAGE')",
                    "d.objid = t.oid AND d.deptype = 'e'", "c.relkind = 'c'",
+                   "pg_has_role(p.proowner, 'USAGE')", "d.objid = p.oid AND d.deptype IN ('e', 'i')",
                    "n.nspname !~ '^pg_'", "information_schema"):
+        assert clause in LIVE_OBJECTS_SQL, clause
+    # pg_dump's form: input argument types, "(*)" for an aggregate without any
+    for clause in ("unnest(p.proargtypes)", "format_type(a.t, NULL)", "THEN '*'",
+                   "regprocedure"):
         assert clause in LIVE_OBJECTS_SQL, clause
 
 
@@ -336,7 +359,7 @@ def test_a_partitioned_table_the_dump_recreates_is_enough(tmp_path):
     assert [o.quoted for o in plan.partitioned] == ["cache.objects", 'public."my events"']
     assert plan.schemas == ["cache", "public"]
     assert _replaced(plan) == ["cache.objects", 'public."my events"', "public.plain"]
-    assert plan.absent == [] and plan.types == []
+    assert plan.absent == [] and plan.others == []
 
 
 def test_the_1_9_interface_still_names_the_partitioned_tables(tmp_path):
@@ -353,7 +376,7 @@ def test_objects_the_snapshot_does_not_contain_replace_the_snapshots_schemas(tmp
     assert plan.partitioned == []
     assert plan.schemas == ["public"]
     assert _replaced(plan) == ["public.plain", "public.suggestion", "public.suggestion_view"]
-    assert [o.quoted for o in plan.types] == ["public.suggestion_kind"]
+    assert [o.quoted for o in plan.others] == ["public.suggestion_kind"]
     # Relations, types, then keys; suggestion's own key goes with it, unlisted.
     assert _absent(plan) == ["public.suggestion", "public.suggestion_view",
                              "type public.suggestion_kind",
@@ -425,8 +448,9 @@ def test_the_prelude_drops_each_type_of_object_in_one_statement(tmp_path):
 def test_the_prelude_drops_what_depends_on_others_first():
     objects = [LiveObject(k, "public", n, "", f"public.{n}", "")
                for k, n in [("S", "s"), ("r", "t"), ("p", "pt"), ("f", "ft"), ("v", "v"),
-                            ("m", "mv"), ("D", "d"), ("T", "e")]]
-    plan = Replacement(relations=objects[:6], types=objects[6:], schemas=["public"],
+                            ("m", "mv"), ("FN", "fn()"), ("PR", "pr(integer)"),
+                            ("AG", "ag(*)"), ("D", "d"), ("T", "e")]]
+    plan = Replacement(relations=objects[:6], others=objects[6:], schemas=["public"],
                        recreated=['we"ird'], partitioned=[], absent=[])
     assert replacement_prelude(plan).splitlines()[6:] == [
         "DROP MATERIALIZED VIEW IF EXISTS public.mv CASCADE;",
@@ -434,6 +458,10 @@ def test_the_prelude_drops_what_depends_on_others_first():
         "DROP FOREIGN TABLE IF EXISTS public.ft CASCADE;",
         "DROP TABLE IF EXISTS public.t, public.pt CASCADE;",
         "DROP SEQUENCE IF EXISTS public.s CASCADE;",
+        # an aggregate before the functions it is made of
+        "DROP AGGREGATE IF EXISTS public.ag(*) CASCADE;",
+        "DROP PROCEDURE IF EXISTS public.pr(integer) CASCADE;",
+        "DROP FUNCTION IF EXISTS public.fn() CASCADE;",
         "DROP DOMAIN IF EXISTS public.d CASCADE;",
         "DROP TYPE IF EXISTS public.e CASCADE;",
         'DROP SCHEMA IF EXISTS "we""ird" CASCADE;',
@@ -457,14 +485,60 @@ def test_the_relations_are_dropped_in_the_restore_transaction(tmp_path):
     assert len(run.applied_sql) == 1
     prelude, script = run.applied_sql[0].split("SET client_min_messages = error;\n")
     assert prelude.startswith("SET client_min_messages = notice;\n") and "BEGIN;\n" in prelude
-    assert script == "-- dump script\n"
+    assert script == SCRIPT
+
+
+def test_routines_the_snapshot_does_not_contain_are_dropped(tmp_path, caplog):
+    # A migration's functions: one with a plain CREATE FUNCTION (Logto, Lago)
+    # would fail with "already exists" when the application migrates again.
+    extra = _live(_o("AG", "public", "sum2(integer)", "public.sum2(integer)"),
+                  _o("FN", "public", "touch2()", "public.touch2()"),
+                  _o("PR", "public", "cleanup(text)", "public.cleanup(text)"))
+    run = _PgRun(live=LIVE_SAME + extra)
+    with caplog.at_level(logging.INFO, logger="backuphelper.sources.postgres"):
+        PostgresSource(_cfg(), run=run).restore(_staged_dump(tmp_path))
+    prelude = run.applied_sql[0]
+    assert "DROP AGGREGATE IF EXISTS public.sum2(integer) CASCADE;\n" in prelude
+    assert "DROP PROCEDURE IF EXISTS public.cleanup(text) CASCADE;\n" in prelude
+    assert "DROP FUNCTION IF EXISTS public.touch2() CASCADE;\n" in prelude
+    # The snapshot's own routines are the dump's to replace.
+    assert "touch()" not in prelude and "tidy" not in prelude and "total" not in prelude
+    assert ("not in the snapshot, dropped: aggregate public.sum2(integer), "
+            "function public.touch2(), procedure public.cleanup(text)"
+            ) in [r.getMessage() for r in caplog.records]
+
+
+def test_a_routine_in_a_schema_the_dump_creates_and_without_relations_is_enough(tmp_path):
+    # The dump's own DROP SCHEMA "cache" (no CASCADE) would fail on it.
+    plan = _plan(tmp_path, LIVE_SAME + _live(_o("FN", "cache", "slug(text)", "cache.slug(text)")))
+    assert [o.label() for o in plan.others] == ["function cache.slug(text)"]
+    assert plan.recreated == ["cache"]
+
+
+def test_the_catalog_query_keeps_long_signatures_whole():
+    # As type name (pg_class.relname) the union's column cut every value to 63
+    # bytes - Logto's check_application_type(character varying, ...) included.
+    assert LIVE_OBJECTS_SQL.startswith(
+        "SELECT c.relkind::text, n.nspname::text, c.relname::text, ")
+
+
+def test_a_procedure_is_dropped_by_its_arguments_with_their_modes():
+    # DROP PROCEDURE p(integer, integer) also matches p(IN integer, OUT integer):
+    # "is not unique" beside an overload. The modes say which one.
+    assert "pg_get_function_identity_arguments(p.oid)" in LIVE_OBJECTS_SQL
+    assert "WHEN p.prokind IN ('f', 'w') THEN p.oid::pg_catalog.regprocedure::text" in LIVE_OBJECTS_SQL
+
+
+def test_a_routine_the_snapshot_does_not_contain_is_enough(tmp_path):
+    plan = _plan(tmp_path, LIVE_SAME + _live(_o("FN", "public", "touch2()", "public.touch2()")))
+    assert [o.label() for o in plan.others] == ["function public.touch2()"]
 
 
 def test_types_outside_the_snapshots_schemas_are_never_dropped(tmp_path):
     # Dropping reporting.grade would take reporting's columns of it along.
     plan = _plan(tmp_path, LIVE_MIGRATED + _live(_o("T", "reporting", "grade"),
                                                  _o("D", "reporting", "pct")))
-    assert [o.quoted for o in plan.types] == ["public.suggestion_kind"]
+    assert [o.quoted for o in plan.others] == ["public.suggestion_kind"]
     assert "reporting" not in replacement_prelude(plan)
 
 

@@ -10,16 +10,16 @@ two kinds of target, and the whole restore rolls back:
 * partitioned tables the dump recreates: it drops each partition's primary key
   on its own, which PostgreSQL refuses (``cannot drop inherited constraint``);
 * a schema that moved on after the snapshot — a newer application version's
-  migrations added tables, views, foreign keys or types. The dump does not know
-  them, so one that depends on the dump's objects blocks their drop (``cannot
-  drop index … because other objects depend on it``).
+  migrations added tables, views, foreign keys, types or functions. The dump
+  does not know them, so one that depends on the dump's objects blocks their
+  drop (``cannot drop index … because other objects depend on it``).
 
 For such a target the restore replaces the snapshot's schemas instead: it drops
-their relations, the types they hold that the dump does not, and the schemas
-the dump creates first, in the same transaction as the dump's own
+their relations, the routines and types they hold that the dump does not, and
+the schemas the dump creates first, in the same transaction as the dump's own
 clean-and-create script — see :func:`_restore_replacing`. What the upgrade added
-there is gone afterwards — functions and the like it added to ``public`` aside —
-so the application finds the snapshot's schema and migrates it again.
+there is gone afterwards, so the application finds the snapshot's schema and
+migrates it again.
 """
 
 from __future__ import annotations
@@ -57,11 +57,23 @@ CATALOG_TIMEOUT = 300  # seconds, for the catalog query and the dump's TOC
 #   extension's member tables (pg_dump never writes those);
 # * enum, range and composite types ("T") and domains ("D") the restoring role
 #   may drop, not an extension's;
+# * functions ("FN", window functions included), procedures ("PR") and
+#   aggregates ("AG") the restoring role may drop, as "name(argument types)" the
+#   way pg_dump lists them - which takes search_path '' (CATALOG_SETUP) - and the
+#   DROP's signature as quoted name: the input argument types for a function,
+#   those with their modes for a procedure and an aggregate - DROP PROCEDURE
+#   with types alone also matches a routine's OUT arguments, which is ambiguous
+#   beside an overload ("is not unique"); not an extension's, not one PostgreSQL
+#   made for a type (a range type's constructors);
 # * the cluster's roles ("R", the role as name): the owners `pg_restore --list`
 #   prints after each entry, whose names may hold spaces.
-# Quoting is PostgreSQL's own, for the DROP.
+# Quoting is PostgreSQL's own, for the DROP. The first branch's names are text:
+# as type name (pg_class.relname) the whole column would be cut to 63 bytes, and
+# with it a routine's "name(argument types)".
+CATALOG_SETUP = "SET search_path = ''"
 LIVE_OBJECTS_SQL = (
-    "SELECT c.relkind::text, n.nspname, c.relname, '', format('%I.%I', n.nspname, c.relname), '' "
+    "SELECT c.relkind::text, n.nspname::text, c.relname::text, '', "
+    "format('%I.%I', n.nspname, c.relname), '' "
     "FROM pg_catalog.pg_class c "
     "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
     "WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S') AND NOT c.relispartition "
@@ -95,6 +107,21 @@ LIVE_OBJECTS_SQL = (
     "AND NOT EXISTS (SELECT FROM pg_catalog.pg_depend d "
     "WHERE d.classid = 'pg_catalog.pg_type'::regclass AND d.objid = t.oid AND d.deptype = 'e') "
     "UNION ALL "
+    "SELECT CASE p.prokind WHEN 'a' THEN 'AG' WHEN 'p' THEN 'PR' ELSE 'FN' END, n.nspname, "
+    "p.proname || '(' || CASE WHEN p.prokind = 'a' AND p.pronargs = 0 THEN '*' "
+    "ELSE coalesce((SELECT string_agg(pg_catalog.format_type(a.t, NULL), ', ' ORDER BY a.o) "
+    "FROM unnest(p.proargtypes) WITH ORDINALITY AS a(t, o)), '') END || ')', '', "
+    "CASE WHEN p.prokind IN ('f', 'w') THEN p.oid::pg_catalog.regprocedure::text "
+    "ELSE format('%I.%I(%s)', n.nspname, p.proname, CASE WHEN p.prokind = 'a' AND p.pronargs = 0 "
+    "THEN '*' ELSE pg_catalog.pg_get_function_identity_arguments(p.oid) END) END, '' "
+    "FROM pg_catalog.pg_proc p "
+    "JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace "
+    "WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema' "
+    "AND pg_catalog.pg_has_role(p.proowner, 'USAGE') "
+    "AND NOT EXISTS (SELECT FROM pg_catalog.pg_depend d "
+    "WHERE d.classid = 'pg_catalog.pg_proc'::regclass AND d.objid = p.oid "
+    "AND d.deptype IN ('e', 'i')) "
+    "UNION ALL "
     "SELECT 'R', '', rolname, '', '', '' FROM pg_catalog.pg_roles "
     "ORDER BY 1, 2, 3, 4"
 )
@@ -103,28 +130,33 @@ LIVE_OBJECTS_SQL = (
 # type of its DROP statement.
 _OBJECT_TYPES = {"r": "TABLE", "p": "TABLE", "v": "VIEW", "m": "MATERIALIZED VIEW",
                  "f": "FOREIGN TABLE", "S": "SEQUENCE", "T": "TYPE", "D": "DOMAIN",
-                 "F": "FK CONSTRAINT"}
+                 "F": "FK CONSTRAINT", "FN": "FUNCTION", "PR": "PROCEDURE",
+                 "AG": "AGGREGATE"}
 _RELATION_TYPES = ("TABLE", "VIEW", "MATERIALIZED VIEW", "FOREIGN TABLE", "SEQUENCE")
 # The prelude drops each type in one statement, in this order - what depends on
 # something mostly comes first. PostgreSQL then reports ("drop cascades to …")
 # the objects outside the dropped ones, and few of those.
 _DROP_ORDER = ("MATERIALIZED VIEW", "VIEW", "FOREIGN TABLE", "TABLE", "SEQUENCE",
-               "DOMAIN", "TYPE")
+               "AGGREGATE", "PROCEDURE", "FUNCTION", "DOMAIN", "TYPE")
+# Non-relations the prelude drops when the dump lacks them, in the log's order.
+_OTHER_KINDS = ("AG", "FN", "PR", "D", "T")
 
 # An object in `pg_restore --list`: "<id>; <catalog> <oid> <type> <schema> <name>
-# <owner>" - catalog 1247 is pg_type, 1259 pg_class, 2606 pg_constraint (whose
-# <name> is "<table> <constraint>"), 2615 pg_namespace (schema "-", the schema's
-# name as <name>). "TABLE DATA" / "TABLE ATTACH" entries carry 0 instead. Names
-# are printed unquoted; the owner is the last field, possibly with spaces.
-_TOC_ENTRY = re.compile(r"^\d+;\s+(?:1247|1259|2606|2615)\s+\d+\s+(.*)$")
-
+# <owner>" - catalog 1247 is pg_type, 1255 pg_proc (<name> "name(argument
+# types)"), 1259 pg_class, 2606 pg_constraint (<name> "<table> <constraint>"),
+# 2615 pg_namespace (schema "-", the schema's name as <name>). "TABLE DATA" /
+# "TABLE ATTACH" entries carry 0 instead. Names are printed unquoted; the owner
+# is the last field, possibly with spaces.
+_TOC_ENTRY = re.compile(r"^\d+;\s+(?:1247|1255|1259|2606|2615)\s+\d+\s+(.*)$")
 
 class LiveObject(NamedTuple):
-    kind: str  # pg_class.relkind, "F" foreign key, "T" type, "D" domain, "R" role
+    # pg_class.relkind, "F" foreign key, "T" type, "D" domain, "FN" function,
+    # "PR" procedure, "AG" aggregate, "R" role
+    kind: str
     schema: str
-    name: str  # the object, or the foreign key's table
+    name: str  # the object, the foreign key's table, or "routine(argument types)"
     constraint: str  # the foreign key's name, empty otherwise
-    quoted: str  # schema.name as PostgreSQL quotes it
+    quoted: str  # schema.name as PostgreSQL quotes it; a routine's DROP signature
     ref_schema: str  # the schema of the table a foreign key references
 
     def key(self) -> str:
@@ -135,13 +167,15 @@ class LiveObject(NamedTuple):
     def label(self) -> str:
         if self.kind == "F":
             return f"foreign key {self.constraint} on {self.quoted}"
-        return {"T": "type ", "D": "domain "}.get(self.kind, "") + self.quoted
+        prefix = {"T": "type ", "D": "domain ", "FN": "function ", "PR": "procedure ",
+                  "AG": "aggregate "}
+        return prefix.get(self.kind, "") + self.quoted
 
 
 class Replacement(NamedTuple):
     """What a restore drops before the dump's own script, and why."""
     relations: list[LiveObject]  # every relation of the snapshot's schemas
-    types: list[LiveObject]  # types and domains of those schemas the dump lacks
+    others: list[LiveObject]  # routines, types and domains there the dump lacks
     schemas: list[str]  # the snapshot's schemas
     recreated: list[str]  # those the dump creates: dropped whole
     partitioned: list[LiveObject]  # partitioned tables the dump recreates
@@ -308,8 +342,8 @@ def plan_replacement(dump: Path, env: dict[str, str], run: RunFn) -> Optional[Re
     """
     live = run(
         ["psql", "--no-psqlrc", "--quiet", "--tuples-only", "--no-align",
-         "--field-separator-zero", "--record-separator-zero",
-         "--set", "ON_ERROR_STOP=1", "--command", LIVE_OBJECTS_SQL],
+         "--field-separator-zero", "--record-separator-zero", "--set", "ON_ERROR_STOP=1",
+         "--command", CATALOG_SETUP, "--command", LIVE_OBJECTS_SQL],
         env=_in_database_encoding(env), capture_output=True, timeout=CATALOG_TIMEOUT,
     )
     if live.returncode != 0:
@@ -332,15 +366,21 @@ def plan_replacement(dump: Path, env: dict[str, str], run: RunFn) -> Optional[Re
     schemas = sorted(s for s in {o.schema for o in relations}
                      if any(k.startswith(f"{t} {s} ") for t in _RELATION_TYPES for k in keys))
     partitioned = [o for o in relations if o.kind == "p" and o.key() in keys]
+    # The schemas the dump creates itself; its clean phase drops them, without
+    # CASCADE, so a routine or type it lacks there stands in the way too - also
+    # in one that holds no relation.
+    recreated = sorted(k[len("SCHEMA - "):] for k in keys
+                       if k.startswith("SCHEMA - ") and k != "SCHEMA - public")
     # Only what the snapshot's schemas hold, or a foreign key onto them, can stand
     # in the way of the dump's clean phase; a schema the dump does not hold is
     # left to itself.
     absent = [o for o in objects if o.key() not in keys
-              and (o.schema in schemas or o.ref_schema in schemas)]
+              and (o.schema in schemas or o.ref_schema in schemas
+                   or (o.kind in _OTHER_KINDS and o.schema in recreated))]
     if not partitioned and not absent:
         return None
     replaced = [o for o in relations if o.schema in schemas]
-    if not any(o.key() in keys for o in replaced):
+    if replaced and not any(o.key() in keys for o in replaced):
         # Nothing in common: another application's database, not the one the
         # snapshot was taken of. Replacing would drop all of it.
         raise SourceError(
@@ -348,14 +388,13 @@ def plan_replacement(dump: Path, env: dict[str, str], run: RunFn) -> Optional[Re
             f"{_shown(', '.join(schemas))} in the target database is in {dump.name} - is it "
             "the database the snapshot was taken of? Restore into an empty database, or drop "
             "its objects first")
-    recreated = sorted(k[len("SCHEMA - "):] for k in keys
-                       if k.startswith("SCHEMA - ") and k != "SCHEMA - public")
-    # For the log: relations, then types, then foreign keys - none of a table
-    # that is not in the snapshot either.
+    # For the log: relations, then routines and types, then foreign keys - none
+    # of a table that is not in the snapshot either.
+    order = (*_OTHER_KINDS, "F")
     gone = {(o.schema, o.name) for o in absent if o.kind != "F"}
     absent = sorted((o for o in absent if o.kind != "F" or (o.schema, o.name) not in gone),
-                    key=lambda o: "TDF".find(o.kind))
-    return Replacement(relations=replaced, types=[o for o in absent if o.kind in "TD"],
+                    key=lambda o: order.index(o.kind) if o.kind in order else -1)
+    return Replacement(relations=replaced, others=[o for o in absent if o.kind in _OTHER_KINDS],
                        schemas=schemas, recreated=recreated, partitioned=partitioned,
                        absent=absent)
 
@@ -406,7 +445,7 @@ def replacement_prelude(plan: Replacement) -> str:
              "WHERE pg_catalog.current_setting('server_version_num')::int >= 170000;",
              "BEGIN;"]
     for drop in _DROP_ORDER:
-        names = [o.quoted for o in [*plan.relations, *plan.types] if _OBJECT_TYPES[o.kind] == drop]
+        names = [o.quoted for o in [*plan.relations, *plan.others] if _OBJECT_TYPES[o.kind] == drop]
         if names:
             lines.append(f"DROP {drop} IF EXISTS {', '.join(names)} CASCADE;")
     if plan.recreated:
@@ -439,7 +478,7 @@ def _restore_replacing(cfg: PostgresConfig, dump: Path, plan: Replacement,
             raise SourceError(f"postgres restore failed: {_text(generate.stderr)}")
         log.info("restoring %s by replacing the %d relation(s) of schema(s) %s "
                  "in one transaction", dump.name, len(plan.relations),
-                 _shown(", ".join(plan.schemas)))
+                 _shown(", ".join(sorted({*plan.schemas, *plan.recreated}))))
         if plan.partitioned:
             log.info("partitioned table(s) the dump recreates: %s",
                      _shown(", ".join(o.label() for o in plan.partitioned)))
