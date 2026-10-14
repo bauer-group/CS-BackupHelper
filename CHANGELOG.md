@@ -4,6 +4,12 @@ All notable changes to this project are documented here. This file is maintained
 automatically by [semantic-release](https://github.com/semantic-release/semantic-release)
 on every release to `main`.
 
+## [1.10.3](https://github.com/bauer-group/CS-BackupHelper/compare/v1.10.2...v1.10.3) (2026-10-14)
+
+### 🐛 Bug Fixes
+
+* **sources:** kept partitioned_tables_to_replace for its consumers ([34ebd86](https://github.com/bauer-group/CS-BackupHelper/commit/34ebd86df61bfa929077bd66b67076b21de6de73))
+
 ## [1.10.2](https://github.com/bauer-group/CS-BackupHelper/compare/v1.10.1...v1.10.2) (2026-10-14)
 
 ### 🐛 Bug Fixes
