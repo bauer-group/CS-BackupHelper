@@ -17,6 +17,7 @@ from backuphelper.sources.postgres import (
     build_env,
     build_restore_argv,
     dump_keys,
+    partitioned_tables_to_replace,
     plan_replacement,
     replacement_prelude,
 )
@@ -336,6 +337,15 @@ def test_a_partitioned_table_the_dump_recreates_is_enough(tmp_path):
     assert plan.schemas == ["cache", "public"]
     assert _replaced(plan) == ["cache.objects", 'public."my events"', "public.plain"]
     assert plan.absent == [] and plan.types == []
+
+
+def test_the_1_9_interface_still_names_the_partitioned_tables(tmp_path):
+    # Consumers probe for it: CS-IAM's image build fails without it.
+    dump = _staged_dump(tmp_path) / "logto.dump"
+    assert partitioned_tables_to_replace(dump, {}, _PgRun(live=LIVE_PARTITIONED)) == [
+        "cache.objects", 'public."my events"']
+    assert partitioned_tables_to_replace(dump, {}, _PgRun(live=LIVE_SAME)) == []
+    assert partitioned_tables_to_replace(dump, {}, _PgRun(live=LIVE_MIGRATED)) == []
 
 
 def test_objects_the_snapshot_does_not_contain_replace_the_snapshots_schemas(tmp_path):

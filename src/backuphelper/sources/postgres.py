@@ -360,6 +360,17 @@ def plan_replacement(dump: Path, env: dict[str, str], run: RunFn) -> Optional[Re
                        absent=absent)
 
 
+def partitioned_tables_to_replace(dump: Path, env: dict[str, str], run: RunFn) -> list[str]:
+    """Quoted names of the target's partitioned tables that the dump recreates.
+
+    The interface of 1.9, kept for consumers that probe for it (CS-IAM's image
+    build checks the engine restores over partitioned tables); the restore
+    itself plans with :func:`plan_replacement`.
+    """
+    plan = plan_replacement(dump, env, run)
+    return [o.quoted for o in plan.partitioned] if plan else []
+
+
 def dump_keys(listing: str, owners: Iterable[str] = ()) -> set[str]:
     """``"<type> <schema> <name>"`` of every schema, type, relation and
     constraint in a ``pg_restore --list``, its owner left off: the longest of
