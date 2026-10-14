@@ -4,6 +4,12 @@ All notable changes to this project are documented here. This file is maintained
 automatically by [semantic-release](https://github.com/semantic-release/semantic-release)
 on every release to `main`.
 
+## [1.10.2](https://github.com/bauer-group/CS-BackupHelper/compare/v1.10.1...v1.10.2) (2026-10-14)
+
+### 🐛 Bug Fixes
+
+* **sources:** restored postgres dumps over a schema migrated after them ([7ce29da](https://github.com/bauer-group/CS-BackupHelper/commit/7ce29da10d45bf4b95eebba4562ed51885d7710b))
+
 ## [1.10.1](https://github.com/bauer-group/CS-BackupHelper/compare/v1.10.0...v1.10.1) (2026-10-09)
 
 ### 🐛 Bug Fixes
