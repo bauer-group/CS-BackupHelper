@@ -6,7 +6,8 @@
 # receivers its other suites deliver to. Each suite starts only its services:
 #
 #   postgres / mariadb / mysql — DB dump + restore (postgres incl. a partitioned
-#                                table and a restricted role's grants)
+#                                table, a restricted role's grants and a schema
+#                                migrated after the snapshot)
 #   minio (+ assets bucket)    — S3-bucket-source mirror + restore
 #   local files                — filesystem source + restore (writable /files)
 #   sink, mail-starttls,       — alerts suite: HTTP and SMTP receivers
