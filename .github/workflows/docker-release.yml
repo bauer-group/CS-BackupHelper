@@ -143,21 +143,30 @@ jobs:
         run: bash scripts/e2e.sh
 
   # ============================================
-  # Release Job (only on main branch push)
+  # Release Job (push to main, or dispatched - by hand or by
+  # docker-maintenance.yml after a Dependabot merge)
   # ============================================
+  # Only after every validation, test, round trip and the image build of this
+  # run passed: a failure skips the release and the image push. Pinned to
+  # github.sha, the commit this run tested - if main moved on meanwhile,
+  # nothing is released here and the run for the newer main releases both.
+  # semantic-release publishes from main only, so a dispatch on another
+  # branch tests everything and releases nothing.
 
   release:
     name: 📦 Create Semantic Release
-    needs: [validate-compose, validate-scripts, test, e2e]
+    needs: [validate-compose, validate-scripts, test, e2e, docker-build-validate]
     if: |
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
       needs.validate-compose.result == 'success' &&
       needs.validate-scripts.result == 'success' &&
       needs.test.result == 'success' &&
-      needs.e2e.result == 'success'
+      needs.e2e.result == 'success' &&
+      needs.docker-build-validate.result == 'success'
     uses: bauer-group/automation-templates/.github/workflows/modules-semantic-release.yml@main
     with:
       target-branch: 'main'
+      ref: ${{ github.sha }}
       dry-run: false
       force-release: ${{ inputs.force-release || false }}
     secrets: inherit
@@ -196,11 +205,13 @@ jobs:
       sync-dockerhub-readme: true
     secrets: inherit
 
-  docker-build-pr:
-    name: 🔨 Validate backuphelper Build (PR)
+  # Every event: the image is built (amd64, not pushed) - on a PR as its CI,
+  # on a push or dispatch as a gate of the release. arm64 is built natively
+  # by the arm64 e2e leg.
+  docker-build-validate:
+    name: 🔨 Validate backuphelper Build
     needs: [validate-compose, validate-scripts, test]
     if: |
-      github.event_name == 'pull_request' &&
       needs.validate-compose.result == 'success' &&
       needs.validate-scripts.result == 'success' &&
       needs.test.result == 'success'
