@@ -4,6 +4,12 @@ All notable changes to this project are documented here. This file is maintained
 automatically by [semantic-release](https://github.com/semantic-release/semantic-release)
 on every release to `main`.
 
+## [1.10.5](https://github.com/bauer-group/CS-BackupHelper/compare/v1.10.4...v1.10.5) (2026-10-21)
+
+### 🐛 Bug Fixes
+
+* **docker:** updated pip to 26.2.2 for the vendored certifi fix ([6cdb91e](https://github.com/bauer-group/CS-BackupHelper/commit/6cdb91ef755e4e74fe979744cbed6ac4f741e3e0))
+
 ## [1.10.4](https://github.com/bauer-group/CS-BackupHelper/compare/v1.10.3...v1.10.4) (2026-10-14)
 
 ### 🐛 Bug Fixes
