@@ -73,6 +73,13 @@ RUN apk add --no-cache \
     && addgroup -g 1000 backup \
     && adduser -u 1000 -G backup -h /app -D backup
 
+# pip stays in the image: meta images install their Source plugins with it.
+# Raised past the base image's own: pip vendors certifi, and the one up to
+# pip 26.2.1 (certifi 2026.6.17, GHSA-6q48-6c7w-9gw2: emSign roots with
+# compromised intermediate keys) is a CRITICAL finding that blocks every
+# meta image's scan. A no-op once python:3.14-alpine ships pip >= 26.2.2.
+RUN pip install --no-cache-dir --upgrade "pip>=26.2.2"
+
 COPY --from=builder /install /usr/local
 # Hard dependency on the test stage passing (the gate).
 COPY --from=test /app/pyproject.toml /tmp/_gate
