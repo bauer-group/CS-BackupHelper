@@ -2,8 +2,10 @@ name: "🔄 Check Base Image Updates"
 
 on:
   schedule:
-    # Daily at 10:00 UTC (11:00 CET / 12:00 CEST)
-    - cron: '0 10 * * *'
+    # Daily at 00:07 UTC (01:07 CET / 02:07 CEST) - a slot of its own, so the
+    # organisation's base image monitors do not release at the same time.
+    # Slot table: bauer-group/automation-templates docs/workflows/modules-docker-base-image-monitor.md
+    - cron: '7 0 * * *'
 
   workflow_dispatch:
     inputs:
