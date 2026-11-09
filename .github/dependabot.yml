@@ -10,6 +10,18 @@
 # Base-image tag bumps here (e.g. python:3.14-alpine → 3.15-alpine) surface as
 # PRs and are auto-merged by docker-maintenance.yml. Pure digest drift on the
 # existing tag is handled by check-base-images.yml (daily cron).
+#
+# The commit prefix decides whether a merged update is released: fix(...)
+# cuts a PATCH release and rebuilds the image, chore(...) releases nothing.
+# Everything that ends up in the shipped image uses fix(...):
+#   docker          -> fix(docker): the base image of ./Dockerfile
+#   pip             -> fix(deps): the runtime packages pyproject.toml
+#                      installs into the image (prefix-development:
+#                      chore(deps-dev) for what Dependabot counts as dev)
+#   docker-compose  -> chore(deps): only the e2e and development stacks
+#                      pin images Dependabot can update (the shipped
+#                      sidecar and example use ${VAR:-default} references)
+#   github-actions  -> chore(ci): no release, never auto-merged
 # =============================================================================
 
 version: 2
@@ -42,7 +54,8 @@ updates:
       - "python"
       - "dependabot"
     commit-message:
-      prefix: "chore(deps)"
+      prefix: "fix(deps)"
+      prefix-development: "chore(deps-dev)"
 
   # Base image (python:3.14-alpine in ./Dockerfile)
   - package-ecosystem: "docker"
@@ -57,7 +70,7 @@ updates:
       - "docker"
       - "dependabot"
     commit-message:
-      prefix: "chore(docker)"
+      prefix: "fix(docker)"
 
   # docker-compose example images
   - package-ecosystem: "docker-compose"
