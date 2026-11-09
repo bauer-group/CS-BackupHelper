@@ -4,6 +4,16 @@ All notable changes to this project are documented here. This file is maintained
 automatically by [semantic-release](https://github.com/semantic-release/semantic-release)
 on every release to `main`.
 
+## [1.10.8](https://github.com/bauer-group/CS-BackupHelper/compare/v1.10.7...v1.10.8) (2026-11-09)
+
+### 🐛 Bug Fixes
+
+* **e2e:** silenced compose progress output in captured runs ([f9562ba](https://github.com/bauer-group/CS-BackupHelper/commit/f9562badf4b302ff0e4ff6176faca2129bf0fa3b))
+
+### 🔧 Maintenance
+
+* **deps:** update base image python-alpine [skip ci] ([f3f136d](https://github.com/bauer-group/CS-BackupHelper/commit/f3f136da536d6d80cf2e68fa8b576364b07986dd))
+
 ## [1.10.7](https://github.com/bauer-group/CS-BackupHelper/compare/v1.10.6...v1.10.7) (2026-10-27)
 
 ### 🔧 Maintenance
