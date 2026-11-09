@@ -43,6 +43,11 @@ export MSYS_NO_PATHCONV=1   # keep /paths literal for git-bash on Windows
 
 cd "$(dirname "$0")/.." || exit 1
 COMPOSE="docker compose -f docker-compose.e2e.yml"
+# Docker Compose v5 (ubuntu-26.04 runners) prints "Container ... Creating/
+# Created" progress lines to stderr on every `run`. The suites capture
+# `run ... 2>&1` and compare it (file contents, snapshot ids), so those lines
+# would end up in the compared data. Quiet keeps output to the container's own.
+export COMPOSE_PROGRESS=quiet
 ALL_SUITES="engines alerts multijob tls encryption"
 PKI=".e2e-pki"
 
