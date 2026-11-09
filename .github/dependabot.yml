@@ -7,9 +7,17 @@
 #   3. The base image inside ./Dockerfile (python:3.14-alpine)
 #   4. Image references inside docker-compose*.yml files
 #
-# Base-image tag bumps here (e.g. python:3.14-alpine → 3.15-alpine) surface as
-# PRs and are auto-merged by docker-maintenance.yml. Pure digest drift on the
-# existing tag is handled by check-base-images.yml (daily cron).
+# docker-maintenance.yml merges a PR after its CI passed (patch updates by
+# default) and dispatches docker-release.yml. The commit prefix decides
+# whether that run releases a new image:
+#   fix(docker) / fix(deps)  the base image and the runtime dependencies are
+#                            in the shipped image -> PATCH release
+#   chore(deps-dev)          test-only Python dependencies -> no release
+#   chore(deps)              images of the dev stack and the e2e servers,
+#                            not shipped -> no release
+#   chore(ci)                GitHub Actions -> no release, merged by hand
+# Pure digest drift on the existing tag is handled by check-base-images.yml
+# (daily cron).
 # =============================================================================
 
 version: 2
@@ -29,7 +37,8 @@ updates:
     commit-message:
       prefix: "chore(ci)"
 
-  # Python runtime + test dependencies
+  # Python runtime + test dependencies: the runtime ones are installed into
+  # the image (fix -> release), the [test] extra only runs the tests
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
@@ -42,7 +51,8 @@ updates:
       - "python"
       - "dependabot"
     commit-message:
-      prefix: "chore(deps)"
+      prefix: "fix(deps)"
+      prefix-development: "chore(deps-dev)"
 
   # Base image (python:3.14-alpine in ./Dockerfile)
   - package-ecosystem: "docker"
@@ -57,9 +67,12 @@ updates:
       - "docker"
       - "dependabot"
     commit-message:
-      prefix: "chore(docker)"
+      prefix: "fix(docker)"
 
-  # docker-compose example images
+  # docker-compose images: what Dependabot can update are the dev stack and
+  # the e2e servers - not shipped. The example files operators copy
+  # (docker-compose.yml, docker-compose.sidecar.yml) name their images through
+  # ${...} variables, which Dependabot leaves alone. So: no release.
   - package-ecosystem: "docker-compose"
     directory: "/"
     schedule:
