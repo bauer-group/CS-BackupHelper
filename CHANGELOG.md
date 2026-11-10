@@ -4,6 +4,12 @@ All notable changes to this project are documented here. This file is maintained
 automatically by [semantic-release](https://github.com/semantic-release/semantic-release)
 on every release to `main`.
 
+## [1.10.9](https://github.com/bauer-group/CS-BackupHelper/compare/v1.10.8...v1.10.9) (2026-11-10)
+
+### 🐛 Bug Fixes
+
+* **docker:** bump python from 3.14-alpine to 3.15-alpine ([#25](https://github.com/bauer-group/CS-BackupHelper/issues/25)) ([4002d90](https://github.com/bauer-group/CS-BackupHelper/commit/4002d909e52718924b9901978b8676c0e633fbf9))
+
 ## [1.10.8](https://github.com/bauer-group/CS-BackupHelper/compare/v1.10.7...v1.10.8) (2026-11-09)
 
 ### 🐛 Bug Fixes
