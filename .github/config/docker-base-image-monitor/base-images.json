@@ -5,7 +5,7 @@
     {
       "name": "python-alpine",
       "image": "python",
-      "tag": "3.14-alpine",
+      "tag": "3.15-alpine",
       "variable": "PYTHON_ALPINE_DIGEST",
       "description": "Base image for the BackupHelper engine (./Dockerfile)"
     }
