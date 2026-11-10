@@ -20,7 +20,7 @@ ARG PG_CLIENT_VERSION=18
 # ---------------------------------------------------------------------------
 # Stage 1 · builder — resolve + install the package and its deps into /install
 # ---------------------------------------------------------------------------
-FROM python:3.14-alpine AS builder
+FROM python:3.15-alpine AS builder
 RUN apk add --no-cache build-base libffi-dev
 WORKDIR /build
 COPY pyproject.toml README.md ./
@@ -30,7 +30,7 @@ RUN pip install --no-cache-dir --prefix=/install .
 # ---------------------------------------------------------------------------
 # Stage 2 · test — pytest gate (build fails if tests fail)
 # ---------------------------------------------------------------------------
-FROM python:3.14-alpine AS test
+FROM python:3.15-alpine AS test
 ARG PG_CLIENT_VERSION
 RUN apk add --no-cache build-base libffi-dev \
         "postgresql${PG_CLIENT_VERSION}-client" mariadb-client mariadb-connector-c
@@ -45,7 +45,7 @@ RUN pytest tests/ -q
 # ---------------------------------------------------------------------------
 # Stage 3 · prod — minimal runtime
 # ---------------------------------------------------------------------------
-FROM python:3.14-alpine AS prod
+FROM python:3.15-alpine AS prod
 ARG PG_CLIENT_VERSION
 ARG IMAGE_VERSION=0.1.0
 
